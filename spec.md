@@ -13,12 +13,12 @@ A personal AI agent for daily use: chat, research, memory, tool use, and light a
 
 ## Stack
 
-- **Agent engine:** Anthropic Agent SDK (TypeScript), running on a Hetzner VPS (Node.js 18+).
+- **Agent engine:** Anthropic Agent SDK (TypeScript), running on a Hetzner VPS (Node.js 24+).
 - **Models:** Sonnet 4.6 default, Opus 4.7 for hard tasks, Haiku 4.5 for routing and cheap subagent work.
 - **Inference:** Anthropic API (direct). Prompt caching is handled automatically by the SDK; 1-hour TTL via `ENABLE_PROMPT_CACHING_1H=1` in the SDK process env.
 - **Backend:** Hetzner VPS hosts the agent loop and exposes `POST /api/chat` (request body carries the user message; response is `text/event-stream`). A Cloudflare Worker fronts auth, validates passkey sessions, and proxies the SSE stream to the VPS through a named Cloudflare Tunnel.
 - **API key isolation:** The Worker also exposes `/v1/*`, which proxies to `https://api.anthropic.com/v1/*`. The Agent SDK on the VPS sets `ANTHROPIC_BASE_URL` to point at the Worker. The VPS sends an `X-Internal-Token` header (Workers Secret); the Worker validates it and injects the real `x-api-key` from Workers Secrets before forwarding. The VPS never stores the Anthropic key.
-- **Storage:** PostgreSQL 16 on the VPS — replaces D1 and KV. R2 for file attachments only (accessed from the VPS via the S3-compatible API).
+- **Storage:** PostgreSQL 17 on the VPS — replaces D1 and KV. R2 for file attachments only (accessed from the VPS via the S3-compatible API).
 - **Frontend:** TanStack Start (probable) or Next.js, shadcn for components, designed mobile-first with PWA installability. Static assets served from Cloudflare Workers Assets at the edge.
 - **Auth:** Passkey via SimpleWebAuthn, single user. Sessions issued by the Worker and validated on every request before proxying to the VPS.
 - **Secrets:** `ANTHROPIC_API_KEY` and `INTERNAL_TOKEN` in Workers Secrets. VPS-side secrets via systemd `EnvironmentFile` (chmod 600, dedicated app user).
@@ -53,7 +53,7 @@ flowchart LR
     Worker[Cloudflare Worker<br/>/auth/* · POST /api/chat<br/>/v1/* API proxy]
     Tunnel[Cloudflare Tunnel<br/>cloudflared]
     SDK[Agent SDK loop<br/>tools · subagents · MCP]
-    PG[(PostgreSQL 16<br/>threads · messages · logs<br/>notes · session_state)]
+    PG[(PostgreSQL 17<br/>threads · messages · logs<br/>notes · session_state)]
     R2[(R2<br/>attachments)]
     Anthropic[Anthropic API<br/>Claude 4.6/4.7]
 
@@ -113,8 +113,8 @@ flowchart TB
         Episodic[Episodic log<br/>Postgres table, append-only<br/>one row per task]
     end
 
-    subgraph Structured[Structured store]
-        Records[Postgres tables:<br/>leetcode_problems,<br/>study_topics,<br/>decisions]
+    subgraph Structured[Structured store · added per migration]
+        Records[Postgres tables<br/>e.g. leetcode_problems,<br/>study_topics, decisions —<br/>added when concretely needed]
     end
 
     Agent[Agent context window] --> Root
@@ -123,24 +123,21 @@ flowchart TB
     Agent -->|SQL via tool| Records
 ```
 
-**Why this shape:** root context is the cheap always-on layer that keeps the agent oriented. The Agent SDK auto-loads `CLAUDE.md` via `settingSources: ['project']` and prompt-caches it. Tiered notes are markdown files searched with the SDK's built-in `Grep`/`Glob` — fast and free of context until invoked. Episodic log and structured records benefit from rows (date ranges, decisions log, LeetCode progress).
+**Why this shape:** root context is the cheap always-on layer that keeps the agent oriented. The Agent SDK auto-loads `CLAUDE.md` via `settingSources: ['project']` and prompt-caches it. Tiered notes are markdown files searched with the SDK's built-in `Grep`/`Glob` — fast and free of context until invoked. Episodic log lives in Postgres (`episodic_log`, append-only). Domain-specific structured tables (LeetCode progress, decisions log, study topics, etc.) get their own migration files when a real need surfaces — not pre-designed.
 
 ## Tool registry
 
-Day-one tools, all defined once and exposed to the main agent and subagents:
+Tools exposed to the main agent and subagents. Most are Agent SDK builtins listed in `ALLOWED_TOOLS` in `apps/agent/src/index.ts`; memory and DB ops are scripts under `apps/agent/bin/` invoked through `Bash`.
 
-| Tool                      | Purpose                        | Notes                                   |
-| ------------------------- | ------------------------------ | --------------------------------------- |
-| `read_file`, `write_file` | Workspace file ops             | Sandboxed to the thread's workspace dir |
-| `grep`, `glob`            | Search the notes layer         | Returns paths + line excerpts           |
-| `web_search`              | External search                | Bing or Brave API                       |
-| `web_fetch`               | Read a URL                     | Strips boilerplate, returns markdown    |
-| `memory_append`           | Write to episodic log or notes | Single tool, mode arg                   |
-| `sqlite_query`            | Read/write structured records  | Read-only by default, write-mode opt-in |
-| `bash`                    | Gated shell execution          | Off by default per thread, toggle in UI |
-| `delegate_to_subagent`    | Fan out to specialist          | Returns summary only                    |
-
-MCP servers added later as needed (calendar, GitHub, Helius internal stuff if I ever want it).
+| Tool                      | Purpose                                  | Notes                                                              |
+| ------------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
+| `Read`, `Write`           | Workspace file ops                       | Agent SDK builtin. cwd = `apps/agent/`                             |
+| `Grep`, `Glob`            | Search the notes layer                   | Agent SDK builtin                                                  |
+| `WebSearch`               | External search                          | Agent SDK builtin                                                  |
+| `Bash`                    | Shell execution                          | Agent SDK builtin. Used to invoke memory + DB scripts              |
+| `Agent`                   | Delegate to subagent                     | Agent SDK builtin. See Subagents section                           |
+| `bin/memory-append.mjs`   | Write to episodic log or notes           | Invoked via `Bash`. `--mode episodic\|notes`                       |
+| `bin/db-query.mjs`        | Read/write Postgres                      | Invoked via `Bash`. Read-only by default; `--write` for mutations  |
 
 ## Subagents
 
@@ -165,7 +162,7 @@ Rules:
 - Max nesting depth 2. Hard cap in code.
 - Each subagent has its own system prompt, cached separately
 
-**Hosting:** Subagents and MCP servers all run inside the same Agent SDK process on the VPS — no separate infrastructure. Subagents inherit the VPS's filesystem and Postgres connection but get scoped tool subsets per `AgentDefinition`. MCP servers are configured per-thread or globally via the `mcpServers` option.
+**Hosting:** Subagents and MCP servers all run inside the same Agent SDK process on the VPS — no separate infrastructure. Subagents inherit the VPS's filesystem and Postgres connection but get scoped tool subsets. Subagents are defined as markdown files under `.claude/agents/` (currently `researcher.md` and `code-reviewer.md`). The SDK loads them automatically; each declares its own model, tools, and system prompt. MCP servers are configured per-thread or globally via the `mcpServers` option.
 
 ## Routing
 
@@ -244,13 +241,14 @@ Goal: cache hit ratio above 70% in steady state. If it's lower, the system promp
 ## Deployment
 
 - **Cloudflare Worker** hosts `/auth/*`, `POST /api/chat` (proxies SSE through the tunnel), `/v1/*` (Anthropic API proxy), and the static frontend via Workers Assets.
-- **Hetzner VPS** hosts: Node.js + Agent SDK (managed by PM2 or systemd), PostgreSQL 16, `cloudflared` running a named tunnel (outbound only), and `tailscaled` for admin SSH.
+- **Hetzner VPS** hosts: Node.js + Agent SDK (managed by systemd), PostgreSQL 17, `cloudflared` running a named tunnel (outbound only), and `tailscaled` for admin SSH.
 - D1 and KV bindings removed. **R2 binding kept** for attachments.
 - `ANTHROPIC_API_KEY` and `INTERNAL_TOKEN` in Workers Secrets. VPS-side env via systemd `EnvironmentFile`.
 - Custom domain via existing Cloudflare DNS.
 - Single environment (prod). No staging — it's just me.
 - `wrangler.toml` checked in for the Worker. VPS deployed via SSH-over-Tailscale + `git pull` + service restart.
 - Service worker registered for PWA, manifest with home-screen icon.
+- See **vps-setup.md** for the full VPS provisioning runbook.
 
 ## Privacy posture
 
@@ -263,15 +261,17 @@ Goal: cache hit ratio above 70% in steady state. If it's lower, the system promp
 
 ## Build order
 
-1. **Agent loop + 4 core tools** — bare SDK, `read_file`/`write_file`/`grep`/`web_search`, CLI harness for fast iteration
-2. **Memory layer** — root context (`CLAUDE.md` on disk), tiered notes (markdown files on disk), episodic log + structured store (Postgres)
-3. **Mobile web UI** — threads, streaming, composer, drawer, settings sheet. Tested on actual iPhone before desktop is even styled.
-4. **PWA + auth** — service worker, manifest, passkey login
-5. **Observability** — `task_logs` writes + cost sheet
-6. **Subagents** — researcher first, then code reviewer
-7. **MCP integration** — as use cases arise
+1. **Agent loop + 4 core tools** — bare SDK, `Read`/`Write`/`Grep`/`WebSearch`, CLI harness for fast iteration
+2. **Memory layer** — root context (`apps/agent/CLAUDE.md`), tiered notes (`apps/agent/notes/<domain>/*.md`), episodic log (Postgres `episodic_log` table). Domain-specific structured tables added per migration as concrete needs arise.
+3. **VPS deployment** — Hetzner CX22, Tailscale-only admin, `ufw` default-deny, systemd, Cloudflare Tunnel. See `vps-setup.md` for the runbook.
+4. **Cloudflare Worker** — `/auth/*` passkey sessions, `POST /api/chat` SSE proxy through the Tunnel, `/v1/*` Anthropic API proxy, Workers Assets for the static frontend.
+5. **Mobile web UI** — threads, streaming, composer, drawer, settings sheet. Tested on actual iPhone before desktop is even styled.
+6. **PWA + auth** — service worker, manifest, passkey login via SimpleWebAuthn.
+7. **Observability** — `task_logs` writes + cost sheet (weekly spend by model, cache hit ratio, tool call success rate, p50/p95 latency, subagent count/cost).
+8. **Subagents** — researcher (Haiku 4.5, web + grep) and code-reviewer (Sonnet 4.6, read-only file tools).
+9. **MCP integration** — calendar, GitHub, others as use cases arise.
 
-**MLC = steps 1–6.** Step 7 (MCP) lands organically as use cases arise. Ship MLC, dogfood on phone, iterate based on what actually annoys me.
+**MLC = steps 1–8.** Step 9 (MCP) lands organically as use cases arise. Ship MLC, dogfood on phone, iterate based on what actually annoys me.
 
 ## Open questions
 
