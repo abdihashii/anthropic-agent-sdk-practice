@@ -7,6 +7,21 @@ const AGENT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const ALLOWED_TOOLS = ['Read', 'Write', 'Grep', 'Glob', 'Bash', 'WebSearch', 'Agent'];
 
+const MAIN_MODEL = 'claude-sonnet-4-6';
+const SUBAGENT_MODELS: Record<string, string> = {
+  researcher: 'claude-haiku-4-5-20251001',
+  'code-reviewer': 'claude-sonnet-4-6',
+};
+
+const GUARDRAIL_WARN_COST = 0.10;
+const GUARDRAIL_ERROR_COST = 0.25;
+const GUARDRAIL_WARN_CACHE_W = 18000;
+const GUARDRAIL_ERROR_CACHE_W = 30000;
+
+function shortModel(id: string): string {
+  return id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+}
+
 let sessionId: string | undefined;
 
 async function chat(prompt: string): Promise<void> {
@@ -16,14 +31,19 @@ async function chat(prompt: string): Promise<void> {
       ...(sessionId && { resume: sessionId }),
       allowedTools: ALLOWED_TOOLS,
       permissionMode: 'acceptEdits',
-      model: 'claude-sonnet-4-6',
+      model: MAIN_MODEL,
       maxTurns: 25,
       cwd: AGENT_ROOT,
     },
   });
 
+  const subagentByToolId = new Map<string, string>();
+
   for await (const msg of stream) {
     if (msg.type === 'assistant') {
+      const activeModel = msg.parent_tool_use_id
+        ? subagentByToolId.get(msg.parent_tool_use_id) ?? MAIN_MODEL
+        : MAIN_MODEL;
       for (const block of msg.message.content) {
         if (block.type === 'text') {
           process.stdout.write(block.text);
@@ -31,16 +51,62 @@ async function chat(prompt: string): Promise<void> {
           const subagentType = block.name === 'Agent'
             ? (block.input as { subagent_type?: string }).subagent_type
             : undefined;
+          if (subagentType) {
+            subagentByToolId.set(block.id, SUBAGENT_MODELS[subagentType] ?? MAIN_MODEL);
+          }
           const label = subagentType
-            ? `[agent: ${subagentType}]`
-            : `[tool: ${block.name}]`;
+            ? `[agent: ${subagentType} (${shortModel(SUBAGENT_MODELS[subagentType] ?? MAIN_MODEL)})]`
+            : `[tool: ${block.name} (${shortModel(activeModel)})]`;
           process.stderr.write(`${label}\n`);
         }
       }
     } else if (msg.type === 'result') {
       sessionId ??= msg.session_id;
       if (msg.subtype === 'success') {
-        process.stdout.write(`\n[$${msg.total_cost_usd.toFixed(4)}]\n`);
+        const breakdown = Object.entries(msg.modelUsage)
+          .map(([id, u]) => `${shortModel(id)} $${u.costUSD.toFixed(4)}`)
+          .join(', ');
+        const tokens = Object.entries(msg.modelUsage)
+          .map(([id, u]) =>
+            `${shortModel(id)}: in ${u.inputTokens}, cache_r ${u.cacheReadInputTokens}, cache_w ${u.cacheCreationInputTokens}, out ${u.outputTokens}`
+          )
+          .join(' | ');
+        const suffix = breakdown ? ` — ${breakdown}` : '';
+        process.stdout.write(`\n[$${msg.total_cost_usd.toFixed(4)}${suffix}]\n`);
+        if (tokens) process.stdout.write(`[tokens — ${tokens}]\n`);
+
+        let worstCacheWModel = '';
+        let worstCacheW = 0;
+        for (const [id, u] of Object.entries(msg.modelUsage)) {
+          if (u.cacheCreationInputTokens > worstCacheW) {
+            worstCacheW = u.cacheCreationInputTokens;
+            worstCacheWModel = shortModel(id);
+          }
+        }
+        const cost = msg.total_cost_usd;
+        const reasons: string[] = [];
+        let level: 'ERROR' | 'WARN' | null = null;
+        const escalate = (l: 'ERROR' | 'WARN') => {
+          if (l === 'ERROR' || level === null) level = l;
+        };
+        if (cost > GUARDRAIL_ERROR_COST) {
+          escalate('ERROR');
+          reasons.push(`turn cost $${cost.toFixed(4)} exceeds $${GUARDRAIL_ERROR_COST.toFixed(2)}`);
+        } else if (cost > GUARDRAIL_WARN_COST) {
+          escalate('WARN');
+          reasons.push(`turn cost $${cost.toFixed(4)} exceeds $${GUARDRAIL_WARN_COST.toFixed(2)}`);
+        }
+        if (worstCacheW > GUARDRAIL_ERROR_CACHE_W) {
+          escalate('ERROR');
+          reasons.push(`${worstCacheWModel} cache_w ${worstCacheW} exceeds ${GUARDRAIL_ERROR_CACHE_W}`);
+        } else if (worstCacheW > GUARDRAIL_WARN_CACHE_W) {
+          escalate('WARN');
+          reasons.push(`${worstCacheWModel} cache_w ${worstCacheW} exceeds ${GUARDRAIL_WARN_CACHE_W}`);
+        }
+        if (level) {
+          const color = level === 'ERROR' ? '\x1b[31m' : '\x1b[33m';
+          process.stderr.write(`${color}[${level}] ${reasons.join('; ')}\x1b[0m\n`);
+        }
       } else {
         process.stderr.write(`\nFailed (${msg.subtype}): ${msg.errors.join('; ')}\n`);
       }
