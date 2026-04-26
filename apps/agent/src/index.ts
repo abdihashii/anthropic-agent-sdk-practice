@@ -3,9 +3,9 @@ import { createInterface } from 'node:readline/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const AGENT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const ALLOWED_TOOLS = ['Read', 'Write', 'Grep', 'WebSearch', 'Agent'];
+const ALLOWED_TOOLS = ['Read', 'Write', 'Grep', 'Glob', 'Bash', 'WebSearch', 'Agent'];
 
 let sessionId: string | undefined;
 
@@ -18,7 +18,7 @@ async function chat(prompt: string): Promise<void> {
       permissionMode: 'acceptEdits',
       model: 'claude-sonnet-4-6',
       maxTurns: 25,
-      cwd: REPO_ROOT,
+      cwd: AGENT_ROOT,
     },
   });
 
