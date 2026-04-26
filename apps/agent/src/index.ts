@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
-const ALLOWED_TOOLS = ['Read', 'Write', 'Grep', 'WebSearch'];
+const ALLOWED_TOOLS = ['Read', 'Write', 'Grep', 'WebSearch', 'Agent'];
 
 let sessionId: string | undefined;
 
@@ -27,6 +27,14 @@ async function chat(prompt: string): Promise<void> {
       for (const block of msg.message.content) {
         if (block.type === 'text') {
           process.stdout.write(block.text);
+        } else if (block.type === 'tool_use') {
+          const subagentType = block.name === 'Agent'
+            ? (block.input as { subagent_type?: string }).subagent_type
+            : undefined;
+          const label = subagentType
+            ? `[agent: ${subagentType}]`
+            : `[tool: ${block.name}]`;
+          process.stderr.write(`${label}\n`);
         }
       }
     } else if (msg.type === 'result') {
