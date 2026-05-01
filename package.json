@@ -6,12 +6,15 @@
     "dev:agent": "pnpm --filter agent dev",
     "dev:agent:server": "pnpm --filter agent dev:server",
     "dev:worker": "pnpm --filter worker dev",
+    "dev:web": "pnpm --filter web dev",
+    "build:web": "pnpm --filter web build",
+    "deploy:web": "pnpm --filter web deploy",
     "test:worker": "pnpm --filter worker test"
   },
   "devDependencies": {
     "typescript": "^5.8.3"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": ["esbuild", "lightningcss", "workerd"]
   }
 }
