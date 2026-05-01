@@ -1,0 +1,11 @@
+INTERNAL_WORKER_TO_VPS=replace-me
+SESSION_SIGNING_KEY=replace-me
+REGISTRATION_CODE=replace-me
+
+# Uncomment to run against the local agent HTTP server (`pnpm dev:agent:server` on :3000)
+# instead of the production tunnel:
+# VPS_ORIGIN=http://localhost:3000
+
+# Uncomment for browser-based passkey testing on localhost:
+# WEBAUTHN_RP_ID=localhost
+# WEBAUTHN_ORIGIN=http://localhost:8787

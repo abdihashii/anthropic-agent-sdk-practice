@@ -3,7 +3,10 @@
   "private": true,
   "packageManager": "pnpm@10.33.2",
   "scripts": {
-    "dev:agent": "pnpm --filter agent dev"
+    "dev:agent": "pnpm --filter agent dev",
+    "dev:agent:server": "pnpm --filter agent dev:server",
+    "dev:worker": "pnpm --filter worker dev",
+    "test:worker": "pnpm --filter worker test"
   },
   "devDependencies": {
     "typescript": "^5.8.3"

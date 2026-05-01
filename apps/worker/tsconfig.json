@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["./worker-configuration.d.ts", "node"],
+    "lib": ["ESNext"],
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src", "worker-configuration.d.ts"]
+}

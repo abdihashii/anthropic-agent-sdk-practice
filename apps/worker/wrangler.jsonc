@@ -1,0 +1,44 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "agent-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-26",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": false,
+	"routes": [
+		{
+			"pattern": "chat.abdirahmanhaji.com/auth/*",
+			"zone_name": "abdirahmanhaji.com"
+		},
+		{
+			"pattern": "chat.abdirahmanhaji.com/api/*",
+			"zone_name": "abdirahmanhaji.com"
+		},
+		{
+			"pattern": "chat.abdirahmanhaji.com/health",
+			"zone_name": "abdirahmanhaji.com"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "WEBAUTHN_CREDS",
+			"id": "d17938d3392644d8867631c49f1a463d"
+		}
+	],
+	"vars": {
+		"VPS_ORIGIN": "https://agent.abdirahmanhaji.com",
+		"WEBAUTHN_RP_ID": "chat.abdirahmanhaji.com",
+		"WEBAUTHN_RP_NAME": "Personal Agent",
+		"WEBAUTHN_ORIGIN": "https://chat.abdirahmanhaji.com",
+		"SESSION_KID": "v1"
+	},
+	"placement": {
+		"mode": "smart"
+	},
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	}
+}
