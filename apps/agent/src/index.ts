@@ -1,22 +1,16 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createInterface } from 'node:readline/promises';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const AGENT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-const ALLOWED_TOOLS = ['Read', 'Write', 'Grep', 'Glob', 'Bash', 'WebSearch', 'Agent'];
-
-const MAIN_MODEL = 'claude-sonnet-4-6';
-const SUBAGENT_MODELS: Record<string, string> = {
-  researcher: 'claude-haiku-4-5-20251001',
-  'code-reviewer': 'claude-sonnet-4-6',
-};
-
-const GUARDRAIL_WARN_COST = 0.10;
-const GUARDRAIL_ERROR_COST = 0.25;
-const GUARDRAIL_WARN_CACHE_W = 18000;
-const GUARDRAIL_ERROR_CACHE_W = 30000;
+import {
+  AGENT_ROOT,
+  ALLOWED_TOOLS,
+  GUARDRAIL_ERROR_CACHE_W,
+  GUARDRAIL_ERROR_COST,
+  GUARDRAIL_WARN_CACHE_W,
+  GUARDRAIL_WARN_COST,
+  MAIN_MODEL,
+  MAX_TURNS,
+  SUBAGENT_MODELS,
+} from './agent-config.js';
 
 function shortModel(id: string): string {
   return id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
@@ -32,7 +26,7 @@ async function chat(prompt: string): Promise<void> {
       allowedTools: ALLOWED_TOOLS,
       permissionMode: 'acceptEdits',
       model: MAIN_MODEL,
-      maxTurns: 25,
+      maxTurns: MAX_TURNS,
       cwd: AGENT_ROOT,
     },
   });

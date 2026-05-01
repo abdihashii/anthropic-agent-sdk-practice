@@ -4,12 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx --env-file=../../.env src/index.ts",
+    "dev": "tsx --env-file=.env src/index.ts",
+    "dev:server": "tsx --env-file=.env src/server.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "start:server": "node dist/server.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.119",
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.14",
     "pg": "^8.13.0"
   },
   "devDependencies": {
