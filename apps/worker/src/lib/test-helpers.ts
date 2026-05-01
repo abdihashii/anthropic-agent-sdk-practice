@@ -29,6 +29,8 @@ export function makeTestEnv(opts: { kv: KVNamespace }): Env {
     INTERNAL_WORKER_TO_VPS: "test-worker-to-vps",
     SESSION_SIGNING_KEY: "test-session-key-32-bytes-min!!!",
     REGISTRATION_CODE: "test-registration-code",
+    DEV_LOGIN_TOKEN: "test-dev-login-token",
+    DEFAULT_DEV_USER_ID: "test-dev-user",
     VPS_ORIGIN: "https://upstream.test",
     WEBAUTHN_RP_ID: "chat.example.com",
     WEBAUTHN_RP_NAME: "Test",

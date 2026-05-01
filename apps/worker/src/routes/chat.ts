@@ -1,5 +1,5 @@
 import type { Handler } from "hono";
-import type { AppEnv } from "./env";
+import type { AppEnv } from "../lib/env";
 
 export const chatProxy: Handler<AppEnv> = async (c) => {
   const target = `${c.env.VPS_ORIGIN}/api/chat`;
@@ -12,6 +12,7 @@ export const chatProxy: Handler<AppEnv> = async (c) => {
         "content-type": c.req.header("content-type") ?? "application/json",
         "accept": "text/event-stream",
         "x-internal-token": c.env.INTERNAL_WORKER_TO_VPS,
+        "x-user-id": c.var.session.sub,
       },
       body: c.req.raw.body,
       cf: { cacheTtl: 0, cacheEverything: false },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "../index";
-import { makeKvMock, makeTestEnv } from "./helpers";
+import { makeKvMock, makeTestEnv } from "../lib/test-helpers";
 
 describe("GET /health", () => {
   it("returns 200 with worker up", async () => {

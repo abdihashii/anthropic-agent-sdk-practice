@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import app from "../index";
-import { makeKvMock, makeTestEnv } from "./helpers";
+import app from "../../index";
+import { makeKvMock, makeTestEnv } from "../../lib/test-helpers";
 
 describe("/auth/*", () => {
   describe("registration code gate", () => {

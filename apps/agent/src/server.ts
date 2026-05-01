@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { serve } from '@hono/node-server';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import pg from 'pg';
 import {
   AGENT_ROOT,
   ALLOWED_TOOLS,
@@ -12,29 +13,118 @@ import {
 
 const PORT = Number(process.env.PORT ?? 3000);
 const EXPECTED_TOKEN = process.env.INTERNAL_WORKER_TO_VPS ?? '';
+const DATABASE_URL = process.env.DATABASE_URL ?? '';
 
 if (!EXPECTED_TOKEN) {
   console.error('INTERNAL_WORKER_TO_VPS not set — refusing to start');
   process.exit(1);
 }
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL not set — refusing to start');
+  process.exit(1);
+}
 
-const app = new Hono();
+const pool = new pg.Pool({ connectionString: DATABASE_URL });
+
+type AppEnv = {
+  Variables: { userId: string };
+};
+
+const app = new Hono<AppEnv>();
 
 app.get('/health', (c) => c.text('agent up\n'));
 
-app.post('/api/chat', async (c) => {
+app.use('/api/*', async (c, next) => {
   const provided = c.req.header('x-internal-token');
   if (!provided || !timingSafeEqualHashed(provided, EXPECTED_TOKEN)) {
     return c.json({ error: 'bad token' }, 401);
   }
+  const userId = c.req.header('x-user-id');
+  if (!userId) return c.json({ error: 'missing user id' }, 401);
+  c.set('userId', userId);
+  await next();
+});
 
-  const body: { message?: string } = await c.req
-    .json<{ message?: string }>()
+app.get('/api/threads', async (c) => {
+  const userId = c.get('userId');
+  const result = await pool.query(
+    `SELECT id, title, created_at, updated_at
+     FROM threads
+     WHERE user_id = $1
+     ORDER BY updated_at DESC
+     LIMIT 200`,
+    [userId],
+  );
+  return c.json({ threads: result.rows });
+});
+
+app.post('/api/threads', async (c) => {
+  const userId = c.get('userId');
+  const id = randomUUID();
+  const result = await pool.query(
+    `INSERT INTO threads (id, user_id)
+     VALUES ($1, $2)
+     RETURNING id, title, created_at, updated_at`,
+    [id, userId],
+  );
+  return c.json(result.rows[0]);
+});
+
+app.get('/api/threads/:id/messages', async (c) => {
+  const userId = c.get('userId');
+  const threadId = c.req.param('id');
+  const ownership = await pool.query(
+    'SELECT 1 FROM threads WHERE id = $1 AND user_id = $2',
+    [threadId, userId],
+  );
+  if (ownership.rows.length === 0) {
+    return c.json({ error: 'thread not found' }, 404);
+  }
+  const result = await pool.query(
+    `SELECT id, role, content, created_at
+     FROM messages
+     WHERE thread_id = $1
+     ORDER BY created_at`,
+    [threadId],
+  );
+  return c.json({ messages: result.rows });
+});
+
+app.post('/api/chat', async (c) => {
+  const userId = c.get('userId');
+  const body: { thread_id?: string; message?: string } = await c.req
+    .json<{ thread_id?: string; message?: string }>()
     .catch(() => ({}));
   const message = typeof body.message === 'string' ? body.message.trim() : '';
-  if (!message) {
-    return c.json({ error: 'missing message' }, 400);
+  const threadId = typeof body.thread_id === 'string' ? body.thread_id : '';
+  if (!message) return c.json({ error: 'missing message' }, 400);
+  if (!threadId) return c.json({ error: 'missing thread_id' }, 400);
+
+  const threadResult = await pool.query<{
+    sdk_session_id: string | null;
+    title: string | null;
+  }>(
+    'SELECT sdk_session_id, title FROM threads WHERE id = $1 AND user_id = $2',
+    [threadId, userId],
+  );
+  if (threadResult.rows.length === 0) {
+    return c.json({ error: 'thread not found' }, 404);
   }
+  const { sdk_session_id, title } = threadResult.rows[0];
+
+  if (title === null) {
+    await pool.query('UPDATE threads SET title = $1 WHERE id = $2', [
+      message.slice(0, 40),
+      threadId,
+    ]);
+  }
+
+  const userMessageId = randomUUID();
+  await pool.query(
+    `INSERT INTO messages (id, thread_id, role, content)
+     VALUES ($1, $2, $3, $4)`,
+    [userMessageId, threadId, 'user', message],
+  );
 
   return streamSSE(c, async (stream) => {
     const events = query({
@@ -45,14 +135,18 @@ app.post('/api/chat', async (c) => {
         model: MAIN_MODEL,
         maxTurns: MAX_TURNS,
         cwd: AGENT_ROOT,
+        resume: sdk_session_id ?? undefined,
       },
     });
+
+    let accumulated = '';
 
     try {
       for await (const msg of events) {
         if (msg.type === 'assistant') {
           for (const block of msg.message.content) {
             if (block.type === 'text') {
+              accumulated += block.text;
               await stream.writeSSE({
                 event: 'chunk',
                 data: JSON.stringify({ text: block.text }),
@@ -66,6 +160,18 @@ app.post('/api/chat', async (c) => {
           }
         } else if (msg.type === 'result') {
           if (msg.subtype === 'success') {
+            const assistantMessageId = randomUUID();
+            await pool.query(
+              `INSERT INTO messages (id, thread_id, role, content)
+               VALUES ($1, $2, $3, $4)`,
+              [assistantMessageId, threadId, 'assistant', accumulated],
+            );
+            await pool.query(
+              `UPDATE threads
+               SET sdk_session_id = $1, updated_at = NOW()
+               WHERE id = $2`,
+              [msg.session_id, threadId],
+            );
             await stream.writeSSE({
               event: 'done',
               data: JSON.stringify({

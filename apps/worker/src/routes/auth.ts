@@ -16,9 +16,9 @@ import {
   signSessionJwt,
   timingSafeEqualHashed,
   verifyChallengeCookie,
-} from "./crypto";
-import type { AppEnv } from "./env";
-import { requireSession } from "./middleware";
+} from "../lib/crypto";
+import type { AppEnv } from "../lib/env";
+import { requireSession } from "../lib/middleware";
 
 const CHALLENGE_TTL_SECONDS = 60 * 5;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;

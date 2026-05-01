@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { signSessionJwt } from "../crypto";
-import app from "../index";
-import { makeKvMock, makeTestEnv } from "./helpers";
+import { signSessionJwt } from "../../lib/crypto";
+import app from "../../index";
+import { makeKvMock, makeTestEnv } from "../../lib/test-helpers";
 
 describe("POST /api/chat", () => {
   let originalFetch: typeof globalThis.fetch;
@@ -76,6 +76,7 @@ describe("POST /api/chat", () => {
     expect(String(url)).toBe("https://upstream.test/api/chat");
     const headers = new Headers(init.headers);
     expect(headers.get("x-internal-token")).toBe(env.INTERNAL_WORKER_TO_VPS);
+    expect(headers.get("x-user-id")).toBe("user-1");
     expect(headers.get("accept")).toBe("text/event-stream");
   });
 
