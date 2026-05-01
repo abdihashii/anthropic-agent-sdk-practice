@@ -17,11 +17,11 @@ A personal AI agent for daily use: chat, research, memory, tool use, and light a
 - **Models:** Sonnet 4.6 default, Opus 4.7 for hard tasks, Haiku 4.5 for routing and cheap subagent work.
 - **Inference:** Anthropic API (direct). Prompt caching is handled automatically by the SDK; 1-hour TTL via `ENABLE_PROMPT_CACHING_1H=1` in the SDK process env.
 - **Backend:** Hetzner VPS hosts the agent loop and exposes `POST /api/chat` (request body carries the user message; response is `text/event-stream`). A Cloudflare Worker fronts auth, validates passkey sessions, and proxies the SSE stream to the VPS through a named Cloudflare Tunnel.
-- **API key isolation:** The Worker also exposes `/v1/*`, which proxies to `https://api.anthropic.com/v1/*`. The Agent SDK on the VPS sets `ANTHROPIC_BASE_URL` to point at the Worker. The VPS sends an `X-Internal-Token` header (Workers Secret); the Worker validates it and injects the real `x-api-key` from Workers Secrets before forwarding. The VPS never stores the Anthropic key.
-- **Storage:** PostgreSQL 17 on the VPS — replaces D1 and KV. R2 for file attachments only (accessed from the VPS via the S3-compatible API).
-- **Frontend:** TanStack Start (probable) or Next.js, shadcn for components, designed mobile-first with PWA installability. Static assets served from Cloudflare Workers Assets at the edge.
-- **Auth:** Passkey via SimpleWebAuthn, single user. Sessions issued by the Worker and validated on every request before proxying to the VPS.
-- **Secrets:** `ANTHROPIC_API_KEY` and `INTERNAL_TOKEN` in Workers Secrets. VPS-side secrets via systemd `EnvironmentFile` (chmod 600, dedicated app user).
+- **API key:** `ANTHROPIC_API_KEY` lives on the VPS in `/opt/agent/.env` (chmod 600, agent user only). The SDK calls Anthropic directly. Operational hardening: Anthropic Console spend cap on the key, VPS is Tailscale-only SSH + ufw default-deny + outbound-only tunnel.
+- **Storage:** PostgreSQL 17 on the VPS — replaces D1 and KV. Workers KV holds passkey credentials (auth-only). R2 for file attachments only (accessed from the VPS via the S3-compatible API).
+- **Frontend:** TanStack Start (probable) or Next.js, shadcn for components, designed mobile-first with PWA installability. Deploys as its own Worker on the catchall `chat.abdirahmanhaji.com/*` path.
+- **Auth:** Passkey via SimpleWebAuthn, multi-user-ready KV schema (`users:`, `creds:`, `user_creds:`). Sessions issued by the Worker as stateless JWT-in-HttpOnly-cookie. Register endpoint gated by `REGISTRATION_CODE` Workers Secret (rotate to invite).
+- **Secrets:** Worker holds `INTERNAL_WORKER_TO_VPS`, `SESSION_SIGNING_KEY`, `REGISTRATION_CODE` in Workers Secrets. VPS holds `ANTHROPIC_API_KEY` and `INTERNAL_WORKER_TO_VPS` (same value as Worker's) in `/opt/agent/.env`.
 
 ## Client strategy
 
@@ -50,7 +50,7 @@ flowchart LR
 flowchart LR
     UI[Web UI<br/>mobile-first<br/>TanStack Start + PWA]
     Assets[Workers Assets<br/>static frontend]
-    Worker[Cloudflare Worker<br/>/auth/* · POST /api/chat<br/>/v1/* API proxy]
+    Worker[Cloudflare Worker<br/>/auth/* · POST /api/chat]
     Tunnel[Cloudflare Tunnel<br/>cloudflared]
     SDK[Agent SDK loop<br/>tools · subagents · MCP]
     PG[(PostgreSQL 17<br/>threads · messages · logs<br/>notes · session_state)]
@@ -73,8 +73,7 @@ flowchart LR
     Tunnel <--> SDK
     SDK <--> PG
     SDK -->|S3 API| R2
-    SDK -->|ANTHROPIC_BASE_URL<br/>X-Internal-Token| Worker
-    Worker -->|inject x-api-key| Anthropic
+    SDK -->|x-api-key| Anthropic
 ```
 
 ## Agent loop
@@ -129,15 +128,15 @@ flowchart TB
 
 Tools exposed to the main agent and subagents. Most are Agent SDK builtins listed in `ALLOWED_TOOLS` in `apps/agent/src/index.ts`; memory and DB ops are scripts under `apps/agent/bin/` invoked through `Bash`.
 
-| Tool                      | Purpose                                  | Notes                                                              |
-| ------------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
-| `Read`, `Write`           | Workspace file ops                       | Agent SDK builtin. cwd = `apps/agent/`                             |
-| `Grep`, `Glob`            | Search the notes layer                   | Agent SDK builtin                                                  |
-| `WebSearch`               | External search                          | Agent SDK builtin                                                  |
-| `Bash`                    | Shell execution                          | Agent SDK builtin. Used to invoke memory + DB scripts              |
-| `Agent`                   | Delegate to subagent                     | Agent SDK builtin. See Subagents section                           |
-| `bin/memory-append.mjs`   | Write to episodic log or notes           | Invoked via `Bash`. `--mode episodic\|notes`                       |
-| `bin/db-query.mjs`        | Read/write Postgres                      | Invoked via `Bash`. Read-only by default; `--write` for mutations  |
+| Tool                    | Purpose                        | Notes                                                             |
+| ----------------------- | ------------------------------ | ----------------------------------------------------------------- |
+| `Read`, `Write`         | Workspace file ops             | Agent SDK builtin. cwd = `apps/agent/`                            |
+| `Grep`, `Glob`          | Search the notes layer         | Agent SDK builtin                                                 |
+| `WebSearch`             | External search                | Agent SDK builtin                                                 |
+| `Bash`                  | Shell execution                | Agent SDK builtin. Used to invoke memory + DB scripts             |
+| `Agent`                 | Delegate to subagent           | Agent SDK builtin. See Subagents section                          |
+| `bin/memory-append.mjs` | Write to episodic log or notes | Invoked via `Bash`. `--mode episodic\|notes`                      |
+| `bin/db-query.mjs`      | Read/write Postgres            | Invoked via `Bash`. Read-only by default; `--write` for mutations |
 
 ## Subagents
 
@@ -146,12 +145,15 @@ flowchart LR
     Main[Main agent<br/>Sonnet 4.6]
     Researcher[Researcher<br/>Haiku 4.5<br/>web + grep tools]
     Reviewer[Code reviewer<br/>Sonnet 4.6<br/>read-only file tools]
+    Opus[Opus worker<br/>Opus 4.7<br/>deep reasoning tasks]
     Result[Summary<br/>returned to main]
 
     Main -->|delegate| Researcher
     Main -->|delegate| Reviewer
+    Main -->|delegate| Opus
     Researcher --> Result
     Reviewer --> Result
+    Opus --> Result
     Result --> Main
 ```
 
@@ -166,7 +168,19 @@ Rules:
 
 ## Routing
 
-Manual only. Per-thread model selector accessible via the thread settings sheet. Default = Sonnet.
+**Automatic pre-query routing.** Before each `query()` call, a raw Haiku API call (~$0.0002, ~200ms) classifies the incoming query and returns `{tier: "haiku" | "sonnet" | "opus", reason: string}`. The orchestration layer in `index.ts` picks the model accordingly:
+
+| Tier     | Model      | Use case                                                             |
+| -------- | ---------- | -------------------------------------------------------------------- |
+| `haiku`  | Haiku 4.5  | Lookups, summaries, classification, routine writes                   |
+| `sonnet` | Sonnet 4.6 | Coding, reasoning, synthesis, most chat (default)                    |
+| `opus`   | Opus 4.7   | Deep ambiguous reasoning, multi-step planning, high-stakes decisions |
+
+The classifier is a raw `anthropic.messages.create()` call — not a subagent and not a system prompt instruction — so it runs before the agent loop starts and pays no prefix tax.
+
+Budget: soft cap ~$50/mo but can flex for Opus on genuinely complex tasks (~$0.025/warm turn vs ~$0.005 for Sonnet).
+
+The routing decision is displayed in the CLI as `[router: <tier> — <reason>]` before the agent response, and the classifier cost is folded into the per-turn cost line. Routing decisions are also persisted to `task_logs` for historical queries like "how often does it route to Opus."
 
 ## Threads and state
 
@@ -240,10 +254,10 @@ Goal: cache hit ratio above 70% in steady state. If it's lower, the system promp
 
 ## Deployment
 
-- **Cloudflare Worker** hosts `/auth/*`, `POST /api/chat` (proxies SSE through the tunnel), `/v1/*` (Anthropic API proxy), and the static frontend via Workers Assets.
-- **Hetzner VPS** hosts: Node.js + Agent SDK (managed by systemd), PostgreSQL 17, `cloudflared` running a named tunnel (outbound only), and `tailscaled` for admin SSH.
-- D1 and KV bindings removed. **R2 binding kept** for attachments.
-- `ANTHROPIC_API_KEY` and `INTERNAL_TOKEN` in Workers Secrets. VPS-side env via systemd `EnvironmentFile`.
+- **Cloudflare Worker** hosts `/auth/*`, `POST /api/chat` (proxies SSE through the tunnel), and `GET /health`. Frontend deploys as a separate Worker on the catchall `/*` path (step 5).
+- **Hetzner VPS** hosts: Node.js + Agent SDK HTTP service (managed by systemd), PostgreSQL 17, `cloudflared` running a named tunnel (outbound only), and `tailscaled` for admin SSH.
+- D1 removed. **KV kept for passkey credentials only** (`WEBAUTHN_CREDS` namespace). **R2 kept** for attachments.
+- Worker secrets: `INTERNAL_WORKER_TO_VPS`, `SESSION_SIGNING_KEY`, `REGISTRATION_CODE`. VPS env via systemd `EnvironmentFile`: `ANTHROPIC_API_KEY`, `INTERNAL_WORKER_TO_VPS`, `DATABASE_URL`.
 - Custom domain via existing Cloudflare DNS.
 - Single environment (prod). No staging — it's just me.
 - `wrangler.toml` checked in for the Worker. VPS deployed via SSH-over-Tailscale + `git pull` + service restart.
@@ -252,7 +266,7 @@ Goal: cache hit ratio above 70% in steady state. If it's lower, the system promp
 
 ## Privacy posture
 
-- Anthropic API key never leaves Workers Secrets — neither the frontend bundle nor the VPS holds it. The Worker injects `x-api-key` only after validating `X-Internal-Token` on incoming requests at `/v1/*`.
+- Anthropic API key lives only in `/opt/agent/.env` on the VPS (chmod 600, agent user). Never in the frontend bundle, never in Workers Secrets. Operational defense: Anthropic Console spend cap caps the dollar damage if the key ever leaks.
 - VPS has no public ports. Cloudflare Tunnel is outbound-only; SSH is Tailscale-only (no public port 22). `ufw` denies all inbound except the `tailscale0` interface.
 - Anthropic's default no-training-on-API-data policy is the privacy floor; acceptable for a single-user personal agent.
 - Persistent data lives in PostgreSQL on the VPS (full-disk encryption) and in R2 in my Cloudflare account.
@@ -261,17 +275,28 @@ Goal: cache hit ratio above 70% in steady state. If it's lower, the system promp
 
 ## Build order
 
-1. **Agent loop + 4 core tools** — bare SDK, `Read`/`Write`/`Grep`/`WebSearch`, CLI harness for fast iteration
+1. **Agent loop + 4 core tools** — bare SDK, `Read`/`Write`/`Grep`/`WebSearch`, CLI harness for fast iteration.
 2. **Memory layer** — root context (`apps/agent/CLAUDE.md`), tiered notes (`apps/agent/notes/<domain>/*.md`), episodic log (Postgres `episodic_log` table). Domain-specific structured tables added per migration as concrete needs arise.
 3. **VPS deployment** — Hetzner CX22, Tailscale-only admin, `ufw` default-deny, systemd, Cloudflare Tunnel. See `vps-setup.md` for the runbook.
-4. **Cloudflare Worker** — `/auth/*` passkey sessions, `POST /api/chat` SSE proxy through the Tunnel, `/v1/*` Anthropic API proxy, Workers Assets for the static frontend.
-5. **Mobile web UI** — threads, streaming, composer, drawer, settings sheet. Tested on actual iPhone before desktop is even styled.
-6. **PWA + auth** — service worker, manifest, passkey login via SimpleWebAuthn.
+4. **Cloudflare Worker + VPS HTTP wrapper** — combined step. Backend Worker (`apps/worker/`) on `chat.abdirahmanhaji.com/{auth,api,health}/*` (passkey sessions, `POST /api/chat` SSE proxy) AND a real `apps/agent/src/server.ts` HTTP service running on the VPS that wraps SDK `query()` and streams events as SSE through the existing `agent.abdirahmanhaji.com` tunnel. No more `hello.mjs` placeholder. SDK calls Anthropic directly with the key from `/opt/agent/.env`.
+5. **Mobile web UI** — threads, streaming, composer, drawer, settings sheet. Tested on actual iPhone before desktop is even styled. TanStack Start as a separate Worker (Vite-built, `main: "@tanstack/react-start/server-entry"`) on the catchall `chat.abdirahmanhaji.com/*` path. Adds `THREADS`/`MESSAGES` tables + `sdk_session_id` resumption when the multi-turn UI lands.
+6. **PWA + auth** — service worker, manifest, passkey login via SimpleWebAuthn (wires UI to step 4's `/auth/*` endpoints).
 7. **Observability** — `task_logs` writes + cost sheet (weekly spend by model, cache hit ratio, tool call success rate, p50/p95 latency, subagent count/cost).
-8. **Subagents** — researcher (Haiku 4.5, web + grep) and code-reviewer (Sonnet 4.6, read-only file tools).
+8. **Subagents + smart routing** — researcher (Haiku 4.5, web + grep), code-reviewer (Sonnet 4.6, read-only file tools), and opus-worker (Opus 4.7, deep reasoning). Pre-query Haiku classifier in `index.ts` routes to the right model before `query()` is called.
 9. **MCP integration** — calendar, GitHub, others as use cases arise.
 
 **MLC = steps 1–8.** Step 9 (MCP) lands organically as use cases arise. Ship MLC, dogfood on phone, iterate based on what actually annoys me.
+
+## Spec drift log
+
+Tracks places where the implementation deliberately diverges from the spec. Each line: what changed, when, why.
+
+- **2026-04 — Postgres 16 → 17.** PG 17 was the current LTS at VPS provisioning time. Same migration files apply.
+- **2026-04 — `wrangler.toml` → `wrangler.jsonc`.** Current Cloudflare best practice (newer features are JSON-only). Spec line 249 still references `.toml`.
+- **2026-04 — Workers Assets → separate web Worker.** TanStack Start ships as its own Worker (not static assets). Backend Worker (step 4) and web Worker (step 5) co-exist on `chat.abdirahmanhaji.com` with path-scoped routes; CF resolves the more-specific routes (`/auth/*`, `/api/*`, `/health`) to the backend Worker first and falls through to the web Worker's catchall.
+- **2026-04 — Public Worker hostname is `chat.abdirahmanhaji.com`.** The existing `agent.abdirahmanhaji.com` tunnel hostname stays as the Worker's private upstream (publicly reachable but secured by VPS-side `INTERNAL_WORKER_TO_VPS` validation).
+- **2026-04 — Passkey credentials live in Workers KV** (`WEBAUTHN_CREDS` namespace). KV for auth is a separate concern from the "no KV" stack note (which referred to app storage). Schema is multi-user-ready from day one.
+- **2026-04 — `/v1/*` Anthropic API proxy removed.** Original spec routed Anthropic calls through the Worker so the API key never lived on the VPS. The Agent SDK doesn't expose custom-header injection, making the proxy integration brittle. For a hardened single-user VPS with a spend-capped key, the operational complexity exceeded the security gain. VPS now holds `ANTHROPIC_API_KEY` directly; Worker no longer has `/v1/*` route, `INTERNAL_VPS_TO_WORKER`, or `ANTHROPIC_API_KEY` secret. Revisit if multi-user or compliance requires it.
 
 ## Open questions
 

@@ -203,6 +203,8 @@ cloudflared --version
 
 ## Phase D — App + systemd
 
+> **Note (post-step-4):** The `hello.mjs` smoke-test placeholder below has been superseded by the real agent service (`apps/agent/src/server.ts`, deployed to `/opt/agent/dist/server.js`). The systemd unit shape below is still accurate; only `ExecStart`, `/opt/agent/.env`, and the file contents differ. See `project_dev_runbook.md` (memory) and `project_build_progress.md` step 4 for the current state. The original phase-D content is kept here for the provisioning-from-scratch story.
+
 ```bash
 install -d -o agent -g agent -m 755 /opt/agent
 
