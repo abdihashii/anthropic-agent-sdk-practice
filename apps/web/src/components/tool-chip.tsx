@@ -82,7 +82,7 @@ const SUMMARIZERS: Record<
   Agent: (i) => {
     const sub = str(i.subagent_type)
     const desc = str(i.description)
-    if (sub && desc) return `${sub} — "${desc}"`
+    if (sub && desc) return `${sub}: "${desc}"`
     if (sub) return sub
     if (desc) return `"${desc}"`
     return null
