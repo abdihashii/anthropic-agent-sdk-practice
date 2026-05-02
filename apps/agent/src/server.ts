@@ -152,30 +152,57 @@ app.post('/api/chat', async (c) => {
         maxTurns: MAX_TURNS,
         cwd: AGENT_ROOT,
         resume: sdk_session_id ?? undefined,
+        includePartialMessages: true,
       },
     });
 
     let accumulated = '';
+    const toolBlocks = new Map<
+      number,
+      { id: string; name: string; inputJson: string }
+    >();
 
     try {
       for await (const msg of events) {
-        if (msg.type === 'assistant') {
-          for (const block of msg.message.content) {
-            if (block.type === 'text') {
-              accumulated += block.text;
+        if (msg.type === 'stream_event') {
+          const e = msg.event;
+          if (e.type === 'content_block_start') {
+            if (e.content_block.type === 'tool_use') {
+              toolBlocks.set(e.index, {
+                id: e.content_block.id,
+                name: e.content_block.name,
+                inputJson: '',
+              });
+            }
+          } else if (e.type === 'content_block_delta') {
+            if (e.delta.type === 'text_delta') {
+              accumulated += e.delta.text;
               await stream.writeSSE({
                 event: 'chunk',
-                data: JSON.stringify({ text: block.text }),
+                data: JSON.stringify({ text: e.delta.text }),
               });
-            } else if (block.type === 'tool_use') {
+            } else if (e.delta.type === 'input_json_delta') {
+              const tool = toolBlocks.get(e.index);
+              if (tool) tool.inputJson += e.delta.partial_json;
+            }
+          } else if (e.type === 'content_block_stop') {
+            const tool = toolBlocks.get(e.index);
+            if (tool) {
+              let input: unknown = {};
+              try {
+                input = tool.inputJson ? JSON.parse(tool.inputJson) : {};
+              } catch {
+                input = {};
+              }
               await stream.writeSSE({
                 event: 'tool_use',
                 data: JSON.stringify({
-                  id: block.id,
-                  name: block.name,
-                  input: block.input,
+                  id: tool.id,
+                  name: tool.name,
+                  input,
                 }),
               });
+              toolBlocks.delete(e.index);
             }
           }
         } else if (msg.type === 'result') {
