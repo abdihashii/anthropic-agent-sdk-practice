@@ -34,7 +34,7 @@ export function Composer({ disabled, onSend }: ComposerProps) {
   }
 
   return (
-    <div className="sticky bottom-0 border-t bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
+    <div className="shrink-0 border-t bg-background px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="relative rounded-lg border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring">
         <textarea
           value={text}
