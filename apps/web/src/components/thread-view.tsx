@@ -11,6 +11,7 @@ import { useChatStream, type Block } from '#/hooks/use-chat-stream'
 import { MessageList } from '#/components/message-list'
 import { Composer } from '#/components/composer'
 import { ToolChip } from '#/components/tool-chip'
+import { AssistantMarkdown } from '#/components/assistant-markdown'
 import { Button } from '#/components/ui/button'
 
 interface ThreadViewProps {
@@ -106,7 +107,7 @@ function LiveBlock({ block }: { block: Block }) {
   }
   return (
     <div className="max-w-[85%] self-start rounded-lg bg-muted px-4 py-2 text-foreground">
-      <pre className="whitespace-pre-wrap font-sans text-sm">{block.text}</pre>
+      <AssistantMarkdown text={block.text} />
     </div>
   )
 }
