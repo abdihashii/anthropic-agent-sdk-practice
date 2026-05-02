@@ -96,21 +96,37 @@ app.post('/api/chat', async (c) => {
     .json<{ thread_id?: string; message?: string }>()
     .catch(() => ({}));
   const message = typeof body.message === 'string' ? body.message.trim() : '';
-  const threadId = typeof body.thread_id === 'string' ? body.thread_id : '';
+  const requestedThreadId =
+    typeof body.thread_id === 'string' ? body.thread_id.trim() : '';
   if (!message) return c.json({ error: 'missing message' }, 400);
-  if (!threadId) return c.json({ error: 'missing thread_id' }, 400);
 
-  const threadResult = await pool.query<{
-    sdk_session_id: string | null;
-    title: string | null;
-  }>(
-    'SELECT sdk_session_id, title FROM threads WHERE id = $1 AND user_id = $2',
-    [threadId, userId],
-  );
-  if (threadResult.rows.length === 0) {
-    return c.json({ error: 'thread not found' }, 404);
+  let threadId: string;
+  let sdk_session_id: string | null;
+  let title: string | null;
+
+  if (requestedThreadId === '') {
+    threadId = randomUUID();
+    await pool.query(
+      'INSERT INTO threads (id, user_id) VALUES ($1, $2)',
+      [threadId, userId],
+    );
+    sdk_session_id = null;
+    title = null;
+  } else {
+    threadId = requestedThreadId;
+    const threadResult = await pool.query<{
+      sdk_session_id: string | null;
+      title: string | null;
+    }>(
+      'SELECT sdk_session_id, title FROM threads WHERE id = $1 AND user_id = $2',
+      [threadId, userId],
+    );
+    if (threadResult.rows.length === 0) {
+      return c.json({ error: 'thread not found' }, 404);
+    }
+    sdk_session_id = threadResult.rows[0].sdk_session_id;
+    title = threadResult.rows[0].title;
   }
-  const { sdk_session_id, title } = threadResult.rows[0];
 
   if (title === null) {
     await pool.query('UPDATE threads SET title = $1 WHERE id = $2', [
@@ -175,6 +191,7 @@ app.post('/api/chat', async (c) => {
             await stream.writeSSE({
               event: 'done',
               data: JSON.stringify({
+                thread_id: threadId,
                 session_id: msg.session_id,
                 cost_usd: msg.total_cost_usd,
               }),
