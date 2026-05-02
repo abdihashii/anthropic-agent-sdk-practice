@@ -170,7 +170,11 @@ app.post('/api/chat', async (c) => {
             } else if (block.type === 'tool_use') {
               await stream.writeSSE({
                 event: 'tool_use',
-                data: JSON.stringify({ id: block.id, name: block.name }),
+                data: JSON.stringify({
+                  id: block.id,
+                  name: block.name,
+                  input: block.input,
+                }),
               });
             }
           }
