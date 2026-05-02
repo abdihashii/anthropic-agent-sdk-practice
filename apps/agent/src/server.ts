@@ -157,12 +157,26 @@ app.post('/api/chat', async (c) => {
     });
 
     let accumulated = '';
+    let pendingTextSeparator = false;
 
     try {
       for await (const msg of events) {
         if (msg.type === 'stream_event') {
           const e = msg.event;
-          if (e.type === 'content_block_delta' && e.delta.type === 'text_delta') {
+          if (
+            e.type === 'content_block_start' &&
+            e.content_block.type === 'text' &&
+            accumulated.length > 0
+          ) {
+            pendingTextSeparator = true;
+          } else if (
+            e.type === 'content_block_delta' &&
+            e.delta.type === 'text_delta'
+          ) {
+            if (pendingTextSeparator) {
+              accumulated += '\n\n';
+              pendingTextSeparator = false;
+            }
             accumulated += e.delta.text;
             await stream.writeSSE({
               event: 'chunk',
