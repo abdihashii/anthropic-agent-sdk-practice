@@ -33,12 +33,12 @@ function AuthedLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   return (
-    <div className="flex min-h-dvh">
+    <div className="flex h-dvh overflow-hidden">
       <Sidebar open={sidebarOpen} onOpenChange={setSidebarOpen}>
         <ThreadList onThreadOpen={() => setSidebarOpen(false)} />
       </Sidebar>
-      <main className="flex flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-12 items-center justify-between border-b bg-background/95 px-2 backdrop-blur">
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center justify-between border-b bg-background px-2">
           {!isDesktop ? (
             <Button
               variant="ghost"
