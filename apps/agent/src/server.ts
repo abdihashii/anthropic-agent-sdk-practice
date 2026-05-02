@@ -152,22 +152,40 @@ app.post('/api/chat', async (c) => {
         maxTurns: MAX_TURNS,
         cwd: AGENT_ROOT,
         resume: sdk_session_id ?? undefined,
+        includePartialMessages: true,
       },
     });
 
     let accumulated = '';
+    let pendingTextSeparator = false;
 
     try {
       for await (const msg of events) {
-        if (msg.type === 'assistant') {
+        if (msg.type === 'stream_event') {
+          const e = msg.event;
+          if (
+            e.type === 'content_block_start' &&
+            e.content_block.type === 'text' &&
+            accumulated.length > 0
+          ) {
+            pendingTextSeparator = true;
+          } else if (
+            e.type === 'content_block_delta' &&
+            e.delta.type === 'text_delta'
+          ) {
+            if (pendingTextSeparator) {
+              accumulated += '\n\n';
+              pendingTextSeparator = false;
+            }
+            accumulated += e.delta.text;
+            await stream.writeSSE({
+              event: 'chunk',
+              data: JSON.stringify({ text: e.delta.text }),
+            });
+          }
+        } else if (msg.type === 'assistant') {
           for (const block of msg.message.content) {
-            if (block.type === 'text') {
-              accumulated += block.text;
-              await stream.writeSSE({
-                event: 'chunk',
-                data: JSON.stringify({ text: block.text }),
-              });
-            } else if (block.type === 'tool_use') {
+            if (block.type === 'tool_use' && block.name !== 'ToolSearch') {
               await stream.writeSSE({
                 event: 'tool_use',
                 data: JSON.stringify({
