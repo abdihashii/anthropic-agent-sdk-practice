@@ -167,7 +167,10 @@ app.post('/api/chat', async (c) => {
         if (msg.type === 'stream_event') {
           const e = msg.event;
           if (e.type === 'content_block_start') {
-            if (e.content_block.type === 'tool_use') {
+            if (
+              e.content_block.type === 'tool_use' &&
+              e.content_block.name !== 'ToolSearch'
+            ) {
               toolBlocks.set(e.index, {
                 id: e.content_block.id,
                 name: e.content_block.name,
