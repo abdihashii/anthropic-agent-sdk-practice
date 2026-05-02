@@ -1,4 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
+import { parseSseStream } from '#/lib/sse'
 
 export interface Me {
   userId: string
@@ -43,58 +44,36 @@ export interface SendMessageResult {
   session_id: string
 }
 
+interface SendMessageCallbacks {
+  onChunk: (text: string) => void
+  onToolUse: (data: { id: string; name: string; input: unknown }) => void
+  signal: AbortSignal
+}
+
 async function sendMessage(
   message: string,
   threadId: string | null,
+  callbacks: SendMessageCallbacks,
 ): Promise<SendMessageResult> {
   const res = await fetch('/api/chat', {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ thread_id: threadId ?? '', message }),
+    signal: callbacks.signal,
   })
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => res.statusText)
     throw new ApiError(res.status, text)
   }
 
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    let sep = buffer.indexOf('\n\n')
-    while (sep !== -1) {
-      const block = buffer.slice(0, sep)
-      buffer = buffer.slice(sep + 2)
-      const parsed = parseSseBlock(block)
-      if (parsed?.event === 'done') {
-        const data = JSON.parse(parsed.data) as SendMessageResult
-        return data
-      }
-      if (parsed?.event === 'error') {
-        const data = JSON.parse(parsed.data) as { message?: string }
-        throw new Error(data.message ?? 'agent error')
-      }
-      sep = buffer.indexOf('\n\n')
-    }
+  for await (const event of parseSseStream(res.body, callbacks.signal)) {
+    if (event.type === 'chunk') callbacks.onChunk(event.data.text)
+    else if (event.type === 'tool_use') callbacks.onToolUse(event.data)
+    else if (event.type === 'done') return event.data
+    else if (event.type === 'error') throw new Error(event.data.message)
   }
   throw new Error('stream ended without done event')
-}
-
-function parseSseBlock(block: string): { event: string; data: string } | null {
-  let event = ''
-  let data = ''
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice(6).trim()
-    else if (line.startsWith('data:')) data = line.slice(5).trim()
-  }
-  if (!event) return null
-  return { event, data }
 }
 
 export const api = {
