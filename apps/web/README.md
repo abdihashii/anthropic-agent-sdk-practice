@@ -1,20 +1,16 @@
 # web
 
-Mobile-first TanStack Start app on Cloudflare Workers (SSR). Step 5b of the personal agent project.
+Mobile-first SPA on Cloudflare Workers Assets. TanStack Start in SPA mode (`spa.enabled: true`) — prerenders a static shell, hydrates client-side. Step 5b of the personal agent project.
+
+See the [root README](../../README.md) for the full local + prod stack rundown.
 
 ## Dev
 
-Run alongside the backend Worker:
-
 ```bash
-# Terminal A
-pnpm dev:worker        # backend on :8787
-
-# Terminal B
-pnpm dev:web           # frontend on :3000
+pnpm dev:web           # vite on :5173
 ```
 
-Set `VITE_API_BASE=http://localhost:8787` in `apps/web/.env.development.local` so SSR fetches reach the backend in dev (in prod, both Workers share `chat.abdirahmanhaji.com` and relative URLs work).
+Needs the worker on :8787 and the agent server on :3000 — see root README.
 
 ## Build / deploy
 
@@ -23,6 +19,4 @@ pnpm build:web
 pnpm deploy:web        # vite build + wrangler deploy
 ```
 
-Routes on `chat.abdirahmanhaji.com/*` (catchall). The backend Worker keeps `/auth/*`, `/api/*`, `/health` via Cloudflare's more-specific-wins precedence.
-
-See `spec.md` for the full system design.
+Deploys as the `agent-web` Worker on `chat.abdirahmanhaji.com/*` (catchall). The backend `agent-worker` keeps `/auth/*`, `/api/*`, `/health` via Cloudflare's more-specific-wins precedence.

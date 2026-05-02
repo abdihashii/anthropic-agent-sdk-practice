@@ -6,9 +6,10 @@
     "dev:agent": "pnpm --filter agent dev",
     "dev:agent:server": "pnpm --filter agent dev:server",
     "dev:worker": "pnpm --filter worker dev",
+    "deploy:worker": "pnpm run --filter worker deploy",
     "dev:web": "pnpm --filter web dev",
     "build:web": "pnpm --filter web build",
-    "deploy:web": "pnpm --filter web deploy",
+    "deploy:web": "pnpm run --filter web deploy",
     "test:worker": "pnpm --filter worker test"
   },
   "devDependencies": {
