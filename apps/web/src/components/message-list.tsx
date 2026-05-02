@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { messagesQueryOptions } from '#/lib/api'
+import { AssistantMarkdown } from '#/components/assistant-markdown'
 
 interface MessageListProps {
   threadId: string
@@ -29,9 +30,13 @@ export function MessageList({ threadId }: MessageListProps) {
               : 'max-w-[85%] self-start rounded-lg bg-muted px-4 py-2 text-foreground'
           }
         >
-          <pre className="whitespace-pre-wrap font-sans text-sm">
-            {m.content}
-          </pre>
+          {m.role === 'assistant' ? (
+            <AssistantMarkdown text={m.content} />
+          ) : (
+            <pre className="whitespace-pre-wrap font-sans text-sm">
+              {m.content}
+            </pre>
+          )}
         </div>
       ))}
     </div>
