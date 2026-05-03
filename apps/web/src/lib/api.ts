@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { parseSseStream } from '#/lib/sse'
+import type { Block } from '#/hooks/use-chat-stream'
 
 export interface Me {
   userId: string
@@ -21,6 +22,7 @@ export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
+  content_blocks: Array<Block> | null
   created_at: string
 }
 
@@ -46,7 +48,12 @@ export interface SendMessageResult {
 
 interface SendMessageCallbacks {
   onChunk: (text: string) => void
-  onToolUse: (data: { id: string; name: string; input: unknown }) => void
+  onToolUse: (data: {
+    id: string
+    name: string
+    input: unknown
+    parent_tool_use_id?: string
+  }) => void
   signal: AbortSignal
 }
 

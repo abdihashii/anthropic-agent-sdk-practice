@@ -3,7 +3,13 @@ import { ApiError, api, type SendMessageResult } from '#/lib/api'
 
 export type Block =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | {
+      type: 'tool_use'
+      id: string
+      name: string
+      input: unknown
+      parent_tool_use_id?: string
+    }
 
 export type StreamStatus = 'idle' | 'streaming' | 'error'
 

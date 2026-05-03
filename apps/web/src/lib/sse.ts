@@ -1,6 +1,14 @@
 export type SseEvent =
   | { type: 'chunk'; data: { text: string } }
-  | { type: 'tool_use'; data: { id: string; name: string; input: unknown } }
+  | {
+      type: 'tool_use'
+      data: {
+        id: string
+        name: string
+        input: unknown
+        parent_tool_use_id?: string
+      }
+    }
   | { type: 'error'; data: { message: string } }
   | {
       type: 'done'
