@@ -211,6 +211,59 @@ describe.each([
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
+  it('Scenario 6: Retry button after error re-sends the same message', async () => {
+    const chat1 = mockChatStream()
+    server.use(chatHandler(chat1))
+    const { user } = await renderWithProviders({
+      initialPath: '/t/t_foo',
+      isMobile,
+      seedMessages: { t_foo: [] },
+    })
+
+    await user.type(screen.getByPlaceholderText('Message…'), 'retry-me')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    chat1.error({ message: 'first failure' })
+    await screen.findByText('first failure')
+
+    const chat2 = mockChatStream()
+    server.use(chatHandler(chat2))
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    chat2.chunk('second try')
+    await screen.findByText('second try')
+
+    chat2.done({ thread_id: 't_foo', session_id: 's', cost_usd: 0 })
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled(),
+    )
+  })
+
+  it('Scenario 7: stream ends without done event surfaces error UI', async () => {
+    const chat = mockChatStream()
+    server.use(chatHandler(chat))
+    const { user } = await renderWithProviders({
+      initialPath: '/t/t_foo',
+      isMobile,
+      seedMessages: { t_foo: [] },
+    })
+
+    await user.type(screen.getByPlaceholderText('Message…'), 'incomplete')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    chat.chunk('partial')
+    await screen.findByText('partial')
+    chat.close()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('stream ended without done event'),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
   it('Scenario 5b: Same-route param swap (/t/foo → /t/bar) — destination renders clean', async () => {
     const { router, user } = await renderWithProviders({
       initialPath: '/t/t_foo',

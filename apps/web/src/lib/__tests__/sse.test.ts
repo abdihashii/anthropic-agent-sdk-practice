@@ -113,6 +113,16 @@ describe('parseSseStream', () => {
     ])
   })
 
+  it('normalizes error frame with errors[] but no subtype', async () => {
+    const stream = synthStream([
+      'event: error\ndata: {"errors":["bad","stuff"]}\n\n',
+    ])
+    const events = await collect(stream)
+    expect(events).toEqual([
+      { type: 'error', data: { message: 'error: bad; stuff' } },
+    ])
+  })
+
   it('normalizes empty error payload to "agent error"', async () => {
     const stream = synthStream(['event: error\ndata: {}\n\n'])
     const events = await collect(stream)
@@ -147,6 +157,14 @@ describe('parseSseStream', () => {
     ac.abort()
     const gen = parseSseStream(stream, ac.signal)
     await expect(gen.next()).rejects.toThrow(/aborted/i)
+  })
+
+  it('drops frames with an unknown event name', async () => {
+    const stream = synthStream([
+      'event: unknown\ndata: {"text":"x"}\n\nevent: chunk\ndata: {"text":"y"}\n\n',
+    ])
+    const events = await collect(stream)
+    expect(events).toEqual([{ type: 'chunk', data: { text: 'y' } }])
   })
 
   it('drops trailing partial when stream ends without final \\n\\n', async () => {
