@@ -30,6 +30,16 @@ type AppEnv = {
   Variables: { userId: string };
 };
 
+type Block =
+  | { type: 'text'; text: string }
+  | {
+      type: 'tool_use';
+      id: string;
+      name: string;
+      input: unknown;
+      parent_tool_use_id?: string;
+    };
+
 const app = new Hono<AppEnv>();
 
 app.get('/health', (c) => c.text('agent up\n'));
@@ -81,7 +91,7 @@ app.get('/api/threads/:id/messages', async (c) => {
     return c.json({ error: 'thread not found' }, 404);
   }
   const result = await pool.query(
-    `SELECT id, role, content, created_at
+    `SELECT id, role, content, content_blocks, created_at
      FROM messages
      WHERE thread_id = $1
      ORDER BY created_at`,
@@ -156,8 +166,8 @@ app.post('/api/chat', async (c) => {
       },
     });
 
-    let accumulated = '';
-    let pendingTextSeparator = false;
+    const blocks: Array<Block> = [];
+    let pendingNewTextBlock = false;
 
     try {
       for await (const msg of events) {
@@ -166,43 +176,61 @@ app.post('/api/chat', async (c) => {
           if (
             e.type === 'content_block_start' &&
             e.content_block.type === 'text' &&
-            accumulated.length > 0
+            blocks.some((b) => b.type === 'text')
           ) {
-            pendingTextSeparator = true;
+            pendingNewTextBlock = true;
           } else if (
             e.type === 'content_block_delta' &&
             e.delta.type === 'text_delta'
           ) {
-            if (pendingTextSeparator) {
-              accumulated += '\n\n';
-              pendingTextSeparator = false;
+            const last = blocks[blocks.length - 1];
+            if (pendingNewTextBlock || !last || last.type !== 'text') {
+              blocks.push({ type: 'text', text: e.delta.text });
+              pendingNewTextBlock = false;
+            } else {
+              last.text += e.delta.text;
             }
-            accumulated += e.delta.text;
             await stream.writeSSE({
               event: 'chunk',
               data: JSON.stringify({ text: e.delta.text }),
             });
           }
         } else if (msg.type === 'assistant') {
+          const parentId = msg.parent_tool_use_id ?? null;
           for (const block of msg.message.content) {
             if (block.type === 'tool_use' && block.name !== 'ToolSearch') {
+              const payload = {
+                id: block.id,
+                name: block.name,
+                input: block.input,
+                ...(parentId ? { parent_tool_use_id: parentId } : {}),
+              };
+              blocks.push({ type: 'tool_use', ...payload });
               await stream.writeSSE({
                 event: 'tool_use',
-                data: JSON.stringify({
-                  id: block.id,
-                  name: block.name,
-                  input: block.input,
-                }),
+                data: JSON.stringify(payload),
               });
             }
           }
         } else if (msg.type === 'result') {
           if (msg.subtype === 'success') {
+            const flatText = blocks
+              .filter(
+                (b): b is Extract<Block, { type: 'text' }> => b.type === 'text',
+              )
+              .map((b) => b.text)
+              .join('\n\n');
             const assistantMessageId = randomUUID();
             await pool.query(
-              `INSERT INTO messages (id, thread_id, role, content)
-               VALUES ($1, $2, $3, $4)`,
-              [assistantMessageId, threadId, 'assistant', accumulated],
+              `INSERT INTO messages (id, thread_id, role, content, content_blocks)
+               VALUES ($1, $2, $3, $4, $5)`,
+              [
+                assistantMessageId,
+                threadId,
+                'assistant',
+                flatText,
+                JSON.stringify(blocks),
+              ],
             );
             await pool.query(
               `UPDATE threads
