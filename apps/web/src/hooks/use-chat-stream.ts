@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { ApiError, api, type SendMessageResult } from '#/lib/api'
 
 export type Block =
@@ -87,7 +88,7 @@ export function useChatStream(): UseChatStreamReturn {
             setBlocks((prev) => [...prev, { type: 'tool_use', ...data }])
           },
         })
-        setStatus('idle')
+        flushSync(() => setStatus('idle'))
         return result
       } catch (err) {
         if (controller.signal.aborted) return null
