@@ -1,4 +1,4 @@
-import { HttpResponse } from 'msw'
+import { HttpResponse, http } from 'msw'
 
 interface DoneData {
   thread_id: string
@@ -19,6 +19,7 @@ export interface MockChatStream {
   error: (data: { message: string } | { subtype?: string; errors?: Array<string> }) => void
   done: (data: DoneData) => void
   close: () => void
+  abort: () => void
   response: Response
 }
 
@@ -47,6 +48,16 @@ export function mockChatStream(): MockChatStream {
     controller.close()
   }
 
+  const abort = () => {
+    if (closed || !controller) return
+    closed = true
+    try {
+      controller.error(new DOMException('aborted', 'AbortError'))
+    } catch {
+      // controller may already be in an errored state
+    }
+  }
+
   return {
     chunk: (text) => enqueue('chunk', { text }),
     toolUse: (data) => enqueue('tool_use', data),
@@ -59,6 +70,7 @@ export function mockChatStream(): MockChatStream {
       finish()
     },
     close: finish,
+    abort,
     response: new HttpResponse(stream, {
       headers: {
         'content-type': 'text/event-stream',
@@ -66,4 +78,11 @@ export function mockChatStream(): MockChatStream {
       },
     }),
   }
+}
+
+export function chatHandler(chat: MockChatStream) {
+  return http.post('/api/chat', ({ request }) => {
+    request.signal.addEventListener('abort', chat.abort)
+    return chat.response
+  })
 }
