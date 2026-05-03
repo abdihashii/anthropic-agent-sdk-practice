@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRouter } from '@tanstack/react-router'
+import { useBlocker, useRouter } from '@tanstack/react-router'
 import {
   StickToBottom,
   useStickToBottom,
@@ -8,11 +8,31 @@ import {
 import { ChevronDownIcon } from 'lucide-react'
 import { messagesQueryOptions } from '#/lib/api'
 import { useChatStream, type Block } from '#/hooks/use-chat-stream'
+import { useIsMobile } from '#/hooks/use-mobile'
 import { MessageList } from '#/components/message-list'
 import { Composer } from '#/components/composer'
 import { ToolChip } from '#/components/tool-chip'
 import { AssistantMarkdown } from '#/components/assistant-markdown'
 import { Button } from '#/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from '#/components/ui/drawer'
 
 interface ThreadViewProps {
   threadId: string | null
@@ -23,6 +43,11 @@ export function ThreadView({ threadId }: ThreadViewProps) {
   const router = useRouter()
   const stickInstance = useStickToBottom({ initial: 'instant', resize: 'smooth' })
   const chat = useChatStream()
+  const blocker = useBlocker({
+    shouldBlockFn: () => chat.status === 'streaming',
+    withResolver: true,
+    enableBeforeUnload: () => chat.status === 'streaming',
+  })
 
   async function handleSend(text: string) {
     void stickInstance.scrollToBottom()
@@ -97,7 +122,68 @@ export function ThreadView({ threadId }: ThreadViewProps) {
         disabled={chat.status === 'streaming'}
         onSend={handleSend}
       />
+      <NavGuardPrompt
+        open={blocker.status === 'blocked'}
+        onCancel={() => blocker.reset?.()}
+        onLeave={() => {
+          chat.abort()
+          blocker.proceed?.()
+        }}
+      />
     </div>
+  )
+}
+
+interface NavGuardPromptProps {
+  open: boolean
+  onCancel: () => void
+  onLeave: () => void
+}
+
+function NavGuardPrompt({ open, onCancel, onLeave }: NavGuardPromptProps) {
+  const isMobile = useIsMobile()
+  const onOpenChange = (next: boolean) => {
+    if (!next) onCancel()
+  }
+  const title = 'Stop response?'
+  const description = 'Leaving will cancel the response in progress.'
+
+  if (isMobile) {
+    return (
+      <Drawer open={open} onOpenChange={onOpenChange}>
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>{title}</DrawerTitle>
+            <DrawerDescription>{description}</DrawerDescription>
+          </DrawerHeader>
+          <DrawerFooter>
+            <Button variant="destructive" onClick={onLeave}>
+              Leave
+            </Button>
+            <DrawerClose asChild>
+              <Button variant="outline">Stay</Button>
+            </DrawerClose>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+    )
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Stay</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onLeave}>
+            Leave
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
