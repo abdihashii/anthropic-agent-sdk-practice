@@ -7,12 +7,11 @@ import {
 } from 'use-stick-to-bottom'
 import { ChevronDownIcon } from 'lucide-react'
 import { messagesQueryOptions } from '#/lib/api'
-import { useChatStream, type Block } from '#/hooks/use-chat-stream'
+import { useChatStream } from '#/hooks/use-chat-stream'
 import { useIsMobile } from '#/hooks/use-mobile'
 import { MessageList } from '#/components/message-list'
 import { Composer } from '#/components/composer'
-import { ToolChip } from '#/components/tool-chip'
-import { AssistantMarkdown } from '#/components/assistant-markdown'
+import { MessageBlocks } from '#/components/message-block'
 import { Button } from '#/components/ui/button'
 import {
   AlertDialog,
@@ -85,9 +84,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
                   {chat.pendingUserMessage}
                 </pre>
               </div>
-              {chat.blocks.map((block, i) => (
-                <LiveBlock key={i} block={block} />
-              ))}
+              <MessageBlocks blocks={chat.blocks} />
               {showThinking && (
                 <p className="self-start text-sm italic text-muted-foreground">
                   Thinking…
@@ -184,17 +181,6 @@ function NavGuardPrompt({ open, onCancel, onLeave }: NavGuardPromptProps) {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  )
-}
-
-function LiveBlock({ block }: { block: Block }) {
-  if (block.type === 'tool_use') {
-    return <ToolChip name={block.name} input={block.input} />
-  }
-  return (
-    <div className="max-w-[85%] self-start rounded-lg bg-muted px-4 py-2 text-foreground">
-      <AssistantMarkdown text={block.text} />
-    </div>
   )
 }
 
