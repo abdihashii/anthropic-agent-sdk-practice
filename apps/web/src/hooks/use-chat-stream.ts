@@ -17,6 +17,7 @@ export interface UseChatStreamReturn {
     threadId: string | null,
   ) => Promise<SendMessageResult | null>
   reset: () => void
+  abort: () => void
 }
 
 export function useChatStream(): UseChatStreamReturn {
@@ -41,6 +42,11 @@ export function useChatStream(): UseChatStreamReturn {
     setBlocks([])
     setErrorMessage(null)
   }, [])
+
+  const abort = useCallback(() => {
+    abortRef.current?.abort()
+    reset()
+  }, [reset])
 
   const send = useCallback(
     async (
@@ -75,6 +81,7 @@ export function useChatStream(): UseChatStreamReturn {
             setBlocks((prev) => [...prev, { type: 'tool_use', ...data }])
           },
         })
+        setStatus('idle')
         return result
       } catch (err) {
         if (controller.signal.aborted) return null
@@ -92,5 +99,5 @@ export function useChatStream(): UseChatStreamReturn {
     [],
   )
 
-  return { status, pendingUserMessage, blocks, errorMessage, send, reset }
+  return { status, pendingUserMessage, blocks, errorMessage, send, reset, abort }
 }
