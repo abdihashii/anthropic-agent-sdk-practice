@@ -32,7 +32,7 @@ When in doubt about whether a task is worth logging: log it to `episodic_log`. C
 
 Use the `Agent` tool to fan out to specialists. Each runs in its own context window and returns a summary:
 
-- `researcher` — Haiku 4.5, web + grep. Use for "look up", "what is", "research" tasks.
+- `researcher` — Haiku 4.5, web search/fetch + grep. Use for "look up", "what is", "research" tasks.
 - `code-reviewer` — Sonnet 4.6, read-only file analysis. Use after writing code or before committing.
 
 Subagents are read-only — they can't write files or run Bash. You (the main agent) own all writes to memory.

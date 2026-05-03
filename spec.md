@@ -143,7 +143,7 @@ Tools exposed to the main agent and subagents. Most are Agent SDK builtins liste
 ```mermaid
 flowchart LR
     Main[Main agent<br/>Sonnet 4.6]
-    Researcher[Researcher<br/>Haiku 4.5<br/>web + grep tools]
+    Researcher[Researcher<br/>Haiku 4.5<br/>web search/fetch + grep]
     Reviewer[Code reviewer<br/>Sonnet 4.6<br/>read-only file tools]
     Opus[Opus worker<br/>Opus 4.7<br/>deep reasoning tasks]
     Result[Summary<br/>returned to main]
@@ -282,7 +282,7 @@ Goal: cache hit ratio above 70% in steady state. If it's lower, the system promp
 5. **Mobile web UI** — threads, streaming, composer, drawer, settings sheet. Tested on actual iPhone before desktop is even styled. TanStack Start as a separate Worker (Vite-built, `main: "@tanstack/react-start/server-entry"`) on the catchall `chat.abdirahmanhaji.com/*` path. Adds `THREADS`/`MESSAGES` tables + `sdk_session_id` resumption when the multi-turn UI lands.
 6. **PWA + auth** — service worker, manifest, passkey login via SimpleWebAuthn (wires UI to step 4's `/auth/*` endpoints).
 7. **Observability** — `task_logs` writes + cost sheet (weekly spend by model, cache hit ratio, tool call success rate, p50/p95 latency, subagent count/cost).
-8. **Subagents + smart routing** — researcher (Haiku 4.5, web + grep), code-reviewer (Sonnet 4.6, read-only file tools), and opus-worker (Opus 4.7, deep reasoning). Pre-query Haiku classifier in `index.ts` routes to the right model before `query()` is called.
+8. **Subagents + smart routing** — researcher (Haiku 4.5, web search/fetch + grep), code-reviewer (Sonnet 4.6, read-only file tools), and opus-worker (Opus 4.7, deep reasoning). Pre-query Haiku classifier in `index.ts` routes to the right model before `query()` is called.
 9. **MCP integration** — calendar, GitHub, others as use cases arise.
 
 **MLC = steps 1–8.** Step 9 (MCP) lands organically as use cases arise. Ship MLC, dogfood on phone, iterate based on what actually annoys me.
