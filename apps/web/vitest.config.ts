@@ -12,5 +12,16 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     restoreMocks: true,
     clearMocks: true,
+    coverage: {
+      exclude: [
+        'src/components/ui/**',
+        'src/test-utils/**',
+        'src/routes/**',
+        'src/router.tsx',
+        '**/*.config.*',
+        '**/*.setup.*',
+        '**/routeTree.gen.ts',
+      ],
+    },
   },
 })

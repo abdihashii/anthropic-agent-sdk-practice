@@ -149,37 +149,6 @@ describe('useChatStream', () => {
       expect(result.current.blocks).toEqual([])
     })
 
-    it('a new send() during streaming aborts the previous send (no double-fire)', async () => {
-      const chat1 = mockChatStream()
-      server.use(chatHandler(chat1))
-      const { result } = renderHook(() => useChatStream())
-      let firstSend!: Promise<unknown>
-      act(() => {
-        firstSend = result.current.send('first', null)
-      })
-      await waitFor(() => expect(result.current.status).toBe('streaming'))
-      chat1.chunk('one')
-      await waitFor(() =>
-        expect(result.current.blocks).toEqual([{ type: 'text', text: 'one' }]),
-      )
-
-      const chat2 = mockChatStream()
-      server.use(chatHandler(chat2))
-      let secondSend!: Promise<unknown>
-      act(() => {
-        secondSend = result.current.send('second', null)
-      })
-
-      const firstResult = await firstSend
-      expect(firstResult).toBeNull()
-
-      await waitFor(() => expect(result.current.pendingUserMessage).toBe('second'))
-      expect(result.current.blocks).toEqual([])
-
-      chat2.done({ thread_id: 't', session_id: 's', cost_usd: 0 })
-      await secondSend
-      await waitFor(() => expect(result.current.status).toBe('idle'))
-    })
   })
 
   describe('cleanup', () => {

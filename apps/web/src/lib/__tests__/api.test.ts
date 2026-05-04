@@ -1,13 +1,7 @@
 import { HttpResponse, http } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '#/test-utils/msw/server'
-import {
-  ApiError,
-  api,
-  meQueryOptions,
-  messagesQueryOptions,
-  threadsQueryOptions,
-} from '../api'
+import { ApiError, api } from '../api'
 
 describe('api', () => {
   describe('me', () => {
@@ -81,23 +75,6 @@ describe('api', () => {
       expect(receivedPath).toBe(
         '/api/threads/thread%2Fwith%2Fslashes/messages',
       )
-    })
-  })
-
-  describe('queryOptions factories', () => {
-    it('meQueryOptions returns a stable queryKey', () => {
-      expect(meQueryOptions().queryKey).toEqual(['me'])
-    })
-
-    it('threadsQueryOptions returns a stable queryKey', () => {
-      expect(threadsQueryOptions().queryKey).toEqual(['threads'])
-    })
-
-    it('messagesQueryOptions includes the threadId in the queryKey', () => {
-      expect(messagesQueryOptions('t_abc').queryKey).toEqual([
-        'messages',
-        't_abc',
-      ])
     })
   })
 

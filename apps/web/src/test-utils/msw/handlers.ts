@@ -1,4 +1,4 @@
-import { HttpResponse, http } from 'msw'
+import { HttpResponse, delay, http } from 'msw'
 import { mockChatStream } from './chat-stream'
 
 const me = {
@@ -30,18 +30,21 @@ export const defaultHandlers = [
   http.get('/api/threads', () =>
     HttpResponse.json({ threads: defaultThreads }),
   ),
-  http.get('/api/threads/:id/messages', () =>
-    HttpResponse.json({ messages: [] }),
-  ),
+  http.get('/api/threads/:id/messages', async () => {
+    await delay(10)
+    return HttpResponse.json({ messages: [] })
+  }),
   http.post('/api/chat', ({ request }) => {
     const chat = mockChatStream()
     request.signal.addEventListener('abort', chat.abort)
-    queueMicrotask(() =>
-      chat.done({
-        thread_id: 't_default',
-        session_id: 's_default',
-        cost_usd: 0,
-      }),
+    setTimeout(
+      () =>
+        chat.done({
+          thread_id: 't_default',
+          session_id: 's_default',
+          cost_usd: 0,
+        }),
+      10,
     )
     return chat.response
   }),

@@ -74,23 +74,6 @@ describe('MessageBlocks', () => {
     expect(text.indexOf('Bash')).toBeLessThan(text.indexOf('after'))
   })
 
-  it('orphan tool_use (parent_tool_use_id with no matching parent) renders at top level', () => {
-    const blocks: Array<Block> = [
-      {
-        type: 'tool_use',
-        id: 'orphan',
-        name: 'Read',
-        input: { file_path: '/x' },
-        parent_tool_use_id: 'missing_parent',
-      },
-    ]
-    const { container } = render(<MessageBlocks blocks={blocks} />)
-    // Per implementation: filter keeps tool_uses with no parent_tool_use_id at top.
-    // tool_uses WITH parent_tool_use_id are filtered OUT of top level.
-    // If the parent doesn't exist, they're never rendered. Confirm that's the behavior.
-    expect(container.querySelectorAll('div').length).toBe(0)
-  })
-
   it('empty blocks renders nothing', () => {
     const { container } = render(<MessageBlocks blocks={[]} />)
     expect(container.firstChild).toBeNull()

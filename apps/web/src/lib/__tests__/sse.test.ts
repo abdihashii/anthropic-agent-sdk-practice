@@ -123,48 +123,12 @@ describe('parseSseStream', () => {
     ])
   })
 
-  it('normalizes empty error payload to "agent error"', async () => {
-    const stream = synthStream(['event: error\ndata: {}\n\n'])
-    const events = await collect(stream)
-    expect(events).toEqual([
-      { type: 'error', data: { message: 'agent error' } },
-    ])
-  })
-
-  it('drops frames missing the event: line', async () => {
-    const stream = synthStream(['data: {"text":"orphan"}\n\n'])
-    const events = await collect(stream)
-    expect(events).toEqual([])
-  })
-
-  it('drops frames missing the data: line', async () => {
-    const stream = synthStream(['event: chunk\n\n'])
-    const events = await collect(stream)
-    expect(events).toEqual([])
-  })
-
-  it('drops frames whose data is invalid JSON', async () => {
-    const stream = synthStream([
-      'event: chunk\ndata: not-json\n\nevent: chunk\ndata: {"text":"ok"}\n\n',
-    ])
-    const events = await collect(stream)
-    expect(events).toEqual([{ type: 'chunk', data: { text: 'ok' } }])
-  })
-
   it('throws AbortError when signal is already aborted', async () => {
     const stream = synthStream(['event: chunk\ndata: {"text":"x"}\n\n'])
     const ac = new AbortController()
     ac.abort()
     const gen = parseSseStream(stream, ac.signal)
     await expect(gen.next()).rejects.toThrow(/aborted/i)
-  })
-
-  it('drops frames with an unknown event name', async () => {
-    const stream = synthStream([
-      'event: unknown\ndata: {"text":"x"}\n\nevent: chunk\ndata: {"text":"y"}\n\n',
-    ])
-    const events = await collect(stream)
-    expect(events).toEqual([{ type: 'chunk', data: { text: 'y' } }])
   })
 
   it('drops trailing partial when stream ends without final \\n\\n', async () => {

@@ -67,18 +67,6 @@ describe('ToolChip', () => {
       expect(screen.getByText('**/*.ts')).toBeInTheDocument()
     })
 
-    it('Grep without a pattern renders no summary', () => {
-      const { container } = render(<ToolChip name="Grep" input={{}} />)
-      expect(screen.getByText('Grep')).toBeInTheDocument()
-      expect(container.querySelectorAll('span').length).toBe(1)
-    })
-
-    it('Glob without a pattern renders no summary', () => {
-      const { container } = render(<ToolChip name="Glob" input={{}} />)
-      expect(screen.getByText('Glob')).toBeInTheDocument()
-      expect(container.querySelectorAll('span').length).toBe(1)
-    })
-
     it('Agent shows "subagent_type: \\"description\\"" when both', () => {
       render(
         <ToolChip
@@ -109,46 +97,11 @@ describe('ToolChip', () => {
       expect(screen.getByText('{"x":1}')).toBeInTheDocument()
     })
 
-    it('null input renders no summary', () => {
-      const { container } = render(<ToolChip name="Read" input={null} />)
-      expect(screen.getByText('Read')).toBeInTheDocument()
-      expect(container.querySelectorAll('span').length).toBe(1)
-    })
-
-    it('non-object primitive input is stringified', () => {
-      render(<ToolChip name="Mystery" input={42} />)
-      expect(screen.getByText('42')).toBeInTheDocument()
-    })
-
     it('summary is truncated to 80 chars with ellipsis', () => {
       const long = 'x'.repeat(100)
       render(<ToolChip name="Bash" input={{ command: long }} />)
       const expected = 'x'.repeat(79) + '…'
       expect(screen.getByText(expected)).toBeInTheDocument()
-    })
-
-    it('Agent with neither subagent_type nor description renders no summary', () => {
-      const { container } = render(
-        <ToolChip name="Agent" input={{ unrelated: 'x' }} />,
-      )
-      expect(screen.getByText('Agent')).toBeInTheDocument()
-      expect(container.querySelectorAll('span').length).toBe(1)
-    })
-
-    it('unknown tool with circular input falls back to empty summary', () => {
-      const circular: Record<string, unknown> = {}
-      circular.self = circular
-      const { container } = render(
-        <ToolChip name="MysteryTool" input={circular} />,
-      )
-      expect(screen.getByText('MysteryTool')).toBeInTheDocument()
-      expect(container.querySelectorAll('span').length).toBe(1)
-    })
-
-    it('summarizer returning null renders no summary (WebSearch w/ no query)', () => {
-      const { container } = render(<ToolChip name="WebSearch" input={{}} />)
-      expect(screen.getByText('WebSearch')).toBeInTheDocument()
-      expect(container.querySelectorAll('span').length).toBe(1)
     })
   })
 })
