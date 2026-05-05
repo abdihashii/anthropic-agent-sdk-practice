@@ -1,5 +1,10 @@
-const CACHE = 'agent-shell-v1'
-const SHELL = ['/index.html', '/manifest.json', '/logo192.png', '/logo512.png', '/favicon.ico']
+const CACHE = 'agent-shell-v2'
+// Cache '/' (canonical) NOT '/index.html'. Cloudflare Workers Assets
+// 307-redirects /index.html -> / for canonical URL enforcement, and a
+// SW serving a redirected response triggers "Response served by service
+// worker has redirections" in Safari/Chrome (browsers refuse cached
+// responses where response.redirected === true for navigation requests).
+const SHELL = ['/', '/manifest.json', '/logo192.png', '/logo512.png', '/favicon.ico']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -36,9 +41,9 @@ self.addEventListener('fetch', (event) => {
   if (req.mode === 'navigate') {
     event.respondWith(
       caches
-        .match('/index.html')
+        .match('/')
         .then((cached) => cached || fetch(req))
-        .catch(() => caches.match('/index.html')),
+        .catch(() => caches.match('/')),
     )
     return
   }
