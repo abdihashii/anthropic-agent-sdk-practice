@@ -1,66 +1,110 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
+import { startAuthentication } from '@simplewebauthn/browser'
 import { ApiError, api } from '#/lib/api'
 import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
 
 export const Route = createFileRoute('/login')({
   component: Login,
 })
 
-function Login() {
+export function Login() {
   const router = useRouter()
-  const [token, setToken] = useState('')
 
-  const mutation = useMutation({
+  const passkeyMutation = useMutation({
+    mutationFn: async () => {
+      const optionsJSON = await api.loginOptions()
+      const response = await startAuthentication({ optionsJSON })
+      return api.loginVerify({ response })
+    },
+    onSuccess: () => router.navigate({ to: '/' }),
+  })
+
+  const [token, setToken] = useState('')
+  const devLoginMutation = useMutation({
     mutationFn: (t: string) => api.devLogin(t),
     onSuccess: () => router.navigate({ to: '/' }),
   })
 
-  const errorMessage =
-    mutation.error instanceof ApiError
-      ? `${mutation.error.status}: ${mutation.error.message}`
-      : mutation.error?.message
-
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-6">
-      <form
-        className="w-full max-w-sm space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (token.trim()) mutation.mutate(token.trim())
-        }}
-      >
+      <div className="w-full max-w-sm space-y-6">
         <div>
           <h1 className="text-2xl font-semibold">Sign in</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Paste the dev-login token to continue.
+            Use your passkey to continue.
           </p>
         </div>
-        <input
-          type="password"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          inputMode="text"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="dev-login token"
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          disabled={mutation.isPending}
-        />
-        <Button
-          type="submit"
-          className="w-full"
-          disabled={mutation.isPending || !token.trim()}
-        >
-          {mutation.isPending ? 'Signing in…' : 'Sign in'}
-        </Button>
-        {errorMessage && (
-          <p className="text-sm text-destructive">{errorMessage}</p>
-        )}
-      </form>
+        <div className="space-y-2">
+          <Button
+            className="w-full"
+            disabled={passkeyMutation.isPending}
+            onClick={() => passkeyMutation.mutate()}
+          >
+            {passkeyMutation.isPending
+              ? 'Signing in…'
+              : 'Sign in with passkey'}
+          </Button>
+          {passkeyMutation.error && (
+            <p className="text-sm text-destructive">
+              {formatPasskeyError(passkeyMutation.error)}
+            </p>
+          )}
+        </div>
+        <div className="border-t pt-6">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Dev fallback
+          </p>
+          <form
+            className="space-y-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (token.trim()) devLoginMutation.mutate(token.trim())
+            }}
+          >
+            <Input
+              type="password"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="dev-login token"
+              disabled={devLoginMutation.isPending}
+            />
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={devLoginMutation.isPending || !token.trim()}
+            >
+              {devLoginMutation.isPending ? 'Signing in…' : 'Use dev token'}
+            </Button>
+            {devLoginMutation.error && (
+              <p className="text-sm text-destructive">
+                {formatApiError(devLoginMutation.error)}
+              </p>
+            )}
+          </form>
+        </div>
+      </div>
     </div>
   )
+}
+
+function formatPasskeyError(err: unknown): string {
+  if (err instanceof Error && err.name === 'NotAllowedError') return 'Cancelled'
+  if (err instanceof ApiError) return `${err.status}: ${err.message}`
+  if (err instanceof Error) return err.message
+  return 'Sign in failed'
+}
+
+function formatApiError(err: unknown): string {
+  if (err instanceof ApiError) return `${err.status}: ${err.message}`
+  if (err instanceof Error) return err.message
+  return 'Failed'
 }
