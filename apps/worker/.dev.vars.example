@@ -7,6 +7,7 @@ DEV_LOGIN_TOKEN='dev-only-paste-this-to-login'
 # instead of the production tunnel:
 # VPS_ORIGIN=http://localhost:3000
 
-# Uncomment for browser-based passkey testing on localhost:
+# Uncomment for browser-based passkey testing on localhost (origin is the vite
+# dev server at :5173, which proxies /auth/* + /api/* to the worker at :8787):
 # WEBAUTHN_RP_ID=localhost
-# WEBAUTHN_ORIGIN=http://localhost:8787
+# WEBAUTHN_ORIGIN=http://localhost:5173
