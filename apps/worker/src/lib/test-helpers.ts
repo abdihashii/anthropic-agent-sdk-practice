@@ -10,9 +10,12 @@ export function makeKvMock(): KVNamespace {
     async delete(key: string) {
       store.delete(key);
     },
-    async list() {
+    async list(opts?: { prefix?: string }) {
+      const prefix = opts?.prefix ?? "";
       return {
-        keys: Array.from(store.keys()).map((name) => ({ name })),
+        keys: Array.from(store.keys())
+          .filter((name) => name.startsWith(prefix))
+          .map((name) => ({ name })),
         list_complete: true,
         cacheStatus: null,
       };

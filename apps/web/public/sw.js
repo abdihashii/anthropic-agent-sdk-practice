@@ -1,4 +1,4 @@
-const CACHE = 'agent-shell-v2'
+const CACHE = 'agent-shell-v3'
 // Cache '/' (canonical) NOT '/index.html'. Cloudflare Workers Assets
 // 307-redirects /index.html -> / for canonical URL enforcement, and a
 // SW serving a redirected response triggers "Response served by service
@@ -17,10 +17,16 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
+    (async () => {
+      // Enable navigation preload so the network fetch starts in parallel
+      // with SW boot; pairs with the network-first navigation handler below.
+      if (self.registration.navigationPreload) {
+        await self.registration.navigationPreload.enable()
+      }
+      const keys = await caches.keys()
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      await self.clients.claim()
+    })(),
   )
 })
 
@@ -39,11 +45,28 @@ self.addEventListener('fetch', (event) => {
     return
 
   if (req.mode === 'navigate') {
+    // Network-first: always try fresh HTML so deploys are picked up
+    // immediately. Prefer the navigation-preload response (started in
+    // parallel with SW boot) over a fresh fetch. Cache under canonical
+    // '/' so the offline fallback is consistent regardless of which SPA
+    // path was requested (same canonical-redirect gotcha that drives
+    // the precache key).
     event.respondWith(
-      caches
-        .match('/')
-        .then((cached) => cached || fetch(req))
-        .catch(() => caches.match('/')),
+      (async () => {
+        try {
+          const preload = event.preloadResponse ? await event.preloadResponse : null
+          const res = preload || (await fetch(req))
+          if (res.ok) {
+            const clone = res.clone()
+            caches.open(CACHE).then((c) => c.put('/', clone))
+          }
+          return res
+        } catch {
+          const cached = await caches.match('/')
+          if (cached) return cached
+          throw new Error('offline and no cached shell')
+        }
+      })(),
     )
     return
   }

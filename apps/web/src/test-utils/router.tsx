@@ -10,6 +10,9 @@ import {
 import type { QueryClient } from '@tanstack/react-query'
 import { meQueryOptions } from '#/lib/api'
 import { ThreadView } from '#/components/thread-view'
+import { Login } from '#/routes/login'
+import { Register } from '#/routes/register'
+import { SettingsPanel } from '#/components/settings-panel'
 
 const TEST_THREAD_IDS = ['t_foo', 't_bar', 't_default'] as const
 
@@ -44,6 +47,7 @@ function AuthedTestLayout() {
             {id}
           </Link>
         ))}
+        <SettingsPanel />
       </nav>
       <Outlet />
     </div>
@@ -68,12 +72,19 @@ const threadRoute = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
-  component: () => <div>login page</div>,
+  component: Login,
+})
+
+const registerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/register',
+  component: Register,
 })
 
 const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([indexRoute, threadRoute]),
   loginRoute,
+  registerRoute,
 ])
 
 export function createTestRouter(

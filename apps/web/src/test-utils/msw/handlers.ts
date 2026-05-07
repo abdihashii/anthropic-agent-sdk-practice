@@ -10,6 +10,27 @@ const me = {
   exp: 9_999_999_999,
 }
 
+const mockRegistrationOptions = {
+  challenge: 'mock-reg-challenge',
+  rp: { id: 'localhost', name: 'Test' },
+  user: { id: 'mock-user', name: 'user', displayName: 'user' },
+  pubKeyCredParams: [],
+  timeout: 60_000,
+  attestation: 'none',
+  authenticatorSelection: {
+    residentKey: 'required',
+    userVerification: 'required',
+  },
+}
+
+const mockAuthenticationOptions = {
+  challenge: 'mock-auth-challenge',
+  rpId: 'localhost',
+  allowCredentials: [],
+  userVerification: 'required',
+  timeout: 60_000,
+}
+
 const defaultThreads = [
   {
     id: 't_foo',
@@ -27,6 +48,39 @@ const defaultThreads = [
 
 export const defaultHandlers = [
   http.get('/auth/me', () => HttpResponse.json(me)),
+  http.patch('/auth/me', async ({ request }) => {
+    const body = (await request.json()) as { name?: string; displayName?: string }
+    return HttpResponse.json({
+      ...me,
+      name: body.name ?? me.name,
+      displayName: body.displayName ?? body.name ?? me.displayName,
+    })
+  }),
+  http.post('/auth/register/options', () =>
+    HttpResponse.json(mockRegistrationOptions),
+  ),
+  http.post('/auth/register/verify', () =>
+    HttpResponse.json({ ok: true, userId: 'u_new' }),
+  ),
+  http.post('/auth/login/options', () =>
+    HttpResponse.json(mockAuthenticationOptions),
+  ),
+  http.post('/auth/login/verify', () =>
+    HttpResponse.json({ ok: true, userId: 'u_test' }),
+  ),
+  http.post('/auth/credentials/add/options', () =>
+    HttpResponse.json(mockRegistrationOptions),
+  ),
+  http.post('/auth/credentials/add/verify', () =>
+    HttpResponse.json({ ok: true, credentialId: 'c_new' }),
+  ),
+  http.get('/auth/credentials', () =>
+    HttpResponse.json({ credentials: [] }),
+  ),
+  http.delete('/auth/credentials/:id', () =>
+    HttpResponse.json({ ok: true }),
+  ),
+  http.post('/auth/logout', () => HttpResponse.json({ ok: true })),
   http.get('/api/threads', () =>
     HttpResponse.json({ threads: defaultThreads }),
   ),

@@ -1,8 +1,16 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from '@tanstack/react-router'
-import { SettingsIcon } from 'lucide-react'
-import { api } from '#/lib/api'
+import { PencilIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
+import { Input } from '#/components/ui/input'
+import { startRegistration } from '@simplewebauthn/browser'
+import {
+  ApiError,
+  api,
+  credentialsQueryOptions,
+  meQueryOptions,
+} from '#/lib/api'
+import type { Credential } from '#/lib/api'
 import { useTheme, type Theme } from '#/hooks/use-theme'
 import {
   Sheet,
@@ -30,6 +38,51 @@ export function SettingsPanel() {
     },
   })
 
+  const addPasskeyMutation = useMutation({
+    mutationFn: async () => {
+      const optionsJSON = await api.credentialsAddOptions()
+      const response = await startRegistration({ optionsJSON })
+      return api.credentialsAddVerify({ response })
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['credentials'] }),
+  })
+
+  const deleteCredentialMutation = useMutation({
+    mutationFn: (id: string) => api.deleteCredential(id),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['credentials'] }),
+  })
+
+  const { data: me } = useQuery(meQueryOptions())
+  const signedInAs = me?.displayName ?? me?.name ?? me?.userId
+
+  const [editingName, setEditingName] = useState(false)
+  const [draftName, setDraftName] = useState('')
+  const updateMeMutation = useMutation({
+    mutationFn: (name: string) => api.updateMe({ name }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['me'], updated)
+      setEditingName(false)
+    },
+  })
+
+  const startEditName = () => {
+    setDraftName(me?.name ?? me?.displayName ?? '')
+    updateMeMutation.reset()
+    setEditingName(true)
+  }
+  const cancelEditName = () => {
+    updateMeMutation.reset()
+    setEditingName(false)
+  }
+  const saveEditName = () => {
+    if (draftName.trim()) updateMeMutation.mutate(draftName.trim())
+  }
+
+  const { data: credentialsData } = useQuery(credentialsQueryOptions())
+  const credentials = credentialsData?.credentials ?? []
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
@@ -40,6 +93,56 @@ export function SettingsPanel() {
       <SheetContent side="right" className="w-72">
         <SheetHeader>
           <SheetTitle>Settings</SheetTitle>
+          {signedInAs &&
+            (editingName ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    aria-label="Your name"
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    disabled={updateMeMutation.isPending}
+                    autoFocus
+                  />
+                  <Button
+                    size="sm"
+                    onClick={saveEditName}
+                    disabled={
+                      !draftName.trim() || updateMeMutation.isPending
+                    }
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={cancelEditName}
+                    disabled={updateMeMutation.isPending}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+                {updateMeMutation.error && (
+                  <p className="text-sm text-destructive">
+                    {formatApiError(updateMeMutation.error)}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">
+                  Signed in as {signedInAs}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Edit name"
+                  onClick={startEditName}
+                >
+                  <PencilIcon className="size-3.5" />
+                </Button>
+              </div>
+            ))}
         </SheetHeader>
         <div className="space-y-6 p-4">
           <div>
@@ -58,6 +161,64 @@ export function SettingsPanel() {
               ))}
             </div>
           </div>
+          <div>
+            <p className="mb-2 text-sm font-medium">Passkeys</p>
+            {credentials.length === 0 ? (
+              <p className="text-sm text-muted-foreground">None yet.</p>
+            ) : (
+              <ul className="space-y-1">
+                {credentials.map((c) => (
+                  <li
+                    key={c.id}
+                    className="flex items-center justify-between gap-2 text-sm tabular-nums"
+                  >
+                    <span className="text-muted-foreground">
+                      {formatCredential(c)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Remove passkey ${c.id}`}
+                      disabled={
+                        deleteCredentialMutation.isPending &&
+                        deleteCredentialMutation.variables === c.id
+                      }
+                      onClick={() => {
+                        if (window.confirm('Remove this passkey?')) {
+                          deleteCredentialMutation.mutate(c.id)
+                        }
+                      }}
+                    >
+                      <Trash2Icon className="size-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {deleteCredentialMutation.error && (
+              <p className="mt-2 text-sm text-destructive">
+                {formatApiError(deleteCredentialMutation.error)}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              className="mt-3 w-full"
+              disabled={addPasskeyMutation.isPending}
+              onClick={() => addPasskeyMutation.mutate()}
+            >
+              {addPasskeyMutation.isPending ? 'Adding…' : 'Add passkey'}
+            </Button>
+            {addPasskeyMutation.isSuccess && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Passkey added.
+              </p>
+            )}
+            {addPasskeyMutation.error && (
+              <p className="mt-2 text-sm text-destructive">
+                {formatAddPasskeyError(addPasskeyMutation.error)}
+              </p>
+            )}
+          </div>
           <Button
             variant="outline"
             className="w-full"
@@ -70,4 +231,26 @@ export function SettingsPanel() {
       </SheetContent>
     </Sheet>
   )
+}
+
+function formatCredential(c: Credential): string {
+  const date = new Date(c.createdAt).toLocaleDateString()
+  const transports = c.transports?.length ? c.transports.join(', ') : 'passkey'
+  return `${date} · ${transports}`
+}
+
+function formatAddPasskeyError(err: unknown): string {
+  if (err instanceof Error && err.name === 'NotAllowedError') return 'Cancelled'
+  if (err instanceof Error && err.name === 'InvalidStateError') {
+    return 'A passkey already exists for this device.'
+  }
+  if (err instanceof ApiError) return `${err.status}: ${err.message}`
+  if (err instanceof Error) return err.message
+  return 'Add passkey failed'
+}
+
+function formatApiError(err: unknown): string {
+  if (err instanceof ApiError) return `${err.status}: ${err.message}`
+  if (err instanceof Error) return err.message
+  return 'Failed'
 }
