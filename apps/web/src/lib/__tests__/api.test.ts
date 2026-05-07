@@ -20,30 +20,6 @@ describe('api', () => {
     })
   })
 
-  describe('devLogin', () => {
-    it('POSTs to /auth/dev-login with x-dev-login-token header', async () => {
-      let receivedHeader: string | null = null
-      server.use(
-        http.post('/auth/dev-login', ({ request }) => {
-          receivedHeader = request.headers.get('x-dev-login-token')
-          return HttpResponse.json({ ok: true, userId: 'u_dev' })
-        }),
-      )
-      const result = await api.devLogin('secret-token')
-      expect(receivedHeader).toBe('secret-token')
-      expect(result).toEqual({ ok: true, userId: 'u_dev' })
-    })
-
-    it('throws ApiError on auth failure', async () => {
-      server.use(
-        http.post('/auth/dev-login', () =>
-          HttpResponse.text('bad token', { status: 403 }),
-        ),
-      )
-      await expect(api.devLogin('wrong')).rejects.toBeInstanceOf(ApiError)
-    })
-  })
-
   describe('logout', () => {
     it('POSTs to /auth/logout and resolves on success', async () => {
       server.use(

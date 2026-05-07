@@ -32,8 +32,7 @@
 		"WEBAUTHN_RP_ID": "chat.abdirahmanhaji.com",
 		"WEBAUTHN_RP_NAME": "Personal Agent",
 		"WEBAUTHN_ORIGIN": "https://chat.abdirahmanhaji.com",
-		"SESSION_KID": "v1",
-		"DEFAULT_DEV_USER_ID": "dev-user-1"
+		"SESSION_KID": "v1"
 	},
 	"placement": {
 		"mode": "smart"

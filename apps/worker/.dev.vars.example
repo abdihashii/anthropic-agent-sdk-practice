@@ -1,7 +1,6 @@
 INTERNAL_WORKER_TO_VPS=replace-me
 SESSION_SIGNING_KEY=replace-me
 REGISTRATION_CODE=replace-me
-DEV_LOGIN_TOKEN='dev-only-paste-this-to-login'
 
 # Uncomment to run against the local agent HTTP server (`pnpm dev:agent:server` on :3000)
 # instead of the production tunnel:

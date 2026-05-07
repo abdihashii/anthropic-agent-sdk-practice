@@ -84,45 +84,4 @@ describe('Login route', () => {
     })
   })
 
-  describe('dev fallback', () => {
-    it('signs in via dev token and navigates to /', async () => {
-      server.use(
-        http.post('/auth/dev-login', () =>
-          HttpResponse.json({ ok: true, userId: 'u_dev' }),
-        ),
-      )
-
-      const { user, router } = await renderWithProviders({
-        initialPath: '/login',
-      })
-      await user.type(
-        screen.getByPlaceholderText(/dev-login token/i),
-        'secret-token',
-      )
-      await user.click(screen.getByRole('button', { name: /use dev token/i }))
-
-      await waitFor(() => {
-        expect(router.state.location.pathname).toBe('/')
-      })
-    })
-
-    it('shows API error on dev-login rejection', async () => {
-      server.use(
-        http.post('/auth/dev-login', () =>
-          HttpResponse.text('bad token', { status: 401 }),
-        ),
-      )
-
-      const { user } = await renderWithProviders({ initialPath: '/login' })
-      await user.type(
-        screen.getByPlaceholderText(/dev-login token/i),
-        'wrong',
-      )
-      await user.click(screen.getByRole('button', { name: /use dev token/i }))
-
-      await waitFor(() => {
-        expect(screen.getByText(/401: bad token/i)).toBeInTheDocument()
-      })
-    })
-  })
 })

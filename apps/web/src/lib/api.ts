@@ -97,11 +97,6 @@ async function sendMessage(
 
 export const api = {
   me: (): Promise<Me> => apiJson<Me>('/auth/me'),
-  devLogin: (token: string): Promise<{ ok: true; userId: string }> =>
-    apiJson('/auth/dev-login', {
-      method: 'POST',
-      headers: { 'x-dev-login-token': token },
-    }),
   logout: (): Promise<{ ok: true }> =>
     apiJson('/auth/logout', { method: 'POST' }),
   updateMe: (args: { name: string; displayName?: string }): Promise<Me> =>
