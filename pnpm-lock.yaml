@@ -17,6 +17,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.119
         version: 0.2.119(zod@4.3.6)
+      '@anthropic-ai/sdk':
+        specifier: ^0.81.0
+        version: 0.81.0(zod@4.3.6)
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.14(hono@4.12.15)
@@ -39,6 +42,9 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.19.17)(jsdom@28.1.0(@noble/hashes@1.8.0))(lightningcss@1.32.0)(msw@2.14.2(@types/node@22.19.17)(typescript@5.9.3))
 
   apps/web:
     dependencies:

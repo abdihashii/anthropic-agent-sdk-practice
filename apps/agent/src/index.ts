@@ -7,10 +7,11 @@ import {
   GUARDRAIL_ERROR_COST,
   GUARDRAIL_WARN_CACHE_W,
   GUARDRAIL_WARN_COST,
-  MAIN_MODEL,
   MAX_TURNS,
   SUBAGENT_MODELS,
+  TIER_MODELS,
 } from './agent-config.js';
+import { classify } from './model-router.js';
 
 function shortModel(id: string): string {
   return id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
@@ -19,13 +20,18 @@ function shortModel(id: string): string {
 let sessionId: string | undefined;
 
 async function chat(prompt: string): Promise<void> {
+  const decision = await classify(prompt);
+  process.stderr.write(`[router: ${decision.tier} — ${decision.reason}]\n`);
+
+  const mainModel = TIER_MODELS[decision.tier];
+
   const stream = query({
     prompt,
     options: {
       ...(sessionId && { resume: sessionId }),
       allowedTools: ALLOWED_TOOLS,
       permissionMode: 'acceptEdits',
-      model: MAIN_MODEL,
+      model: mainModel,
       maxTurns: MAX_TURNS,
       cwd: AGENT_ROOT,
     },
@@ -36,8 +42,8 @@ async function chat(prompt: string): Promise<void> {
   for await (const msg of stream) {
     if (msg.type === 'assistant') {
       const activeModel = msg.parent_tool_use_id
-        ? subagentByToolId.get(msg.parent_tool_use_id) ?? MAIN_MODEL
-        : MAIN_MODEL;
+        ? subagentByToolId.get(msg.parent_tool_use_id) ?? mainModel
+        : mainModel;
       for (const block of msg.message.content) {
         if (block.type === 'text') {
           process.stdout.write(block.text);
@@ -46,10 +52,10 @@ async function chat(prompt: string): Promise<void> {
             ? (block.input as { subagent_type?: string }).subagent_type
             : undefined;
           if (subagentType) {
-            subagentByToolId.set(block.id, SUBAGENT_MODELS[subagentType] ?? MAIN_MODEL);
+            subagentByToolId.set(block.id, SUBAGENT_MODELS[subagentType] ?? mainModel);
           }
           const label = subagentType
-            ? `[agent: ${subagentType} (${shortModel(SUBAGENT_MODELS[subagentType] ?? MAIN_MODEL)})]`
+            ? `[agent: ${subagentType} (${shortModel(SUBAGENT_MODELS[subagentType] ?? mainModel)})]`
             : `[tool: ${block.name} (${shortModel(activeModel)})]`;
           process.stderr.write(`${label}\n`);
         }
@@ -57,16 +63,21 @@ async function chat(prompt: string): Promise<void> {
     } else if (msg.type === 'result') {
       sessionId ??= msg.session_id;
       if (msg.subtype === 'success') {
-        const breakdown = Object.entries(msg.modelUsage)
-          .map(([id, u]) => `${shortModel(id)} $${u.costUSD.toFixed(4)}`)
-          .join(', ');
+        const breakdownParts = Object.entries(msg.modelUsage).map(
+          ([id, u]) => `${shortModel(id)} $${u.costUSD.toFixed(4)}`,
+        );
+        if (decision.costUSD > 0) {
+          breakdownParts.push(`classifier $${decision.costUSD.toFixed(4)}`);
+        }
+        const breakdown = breakdownParts.join(', ');
         const tokens = Object.entries(msg.modelUsage)
           .map(([id, u]) =>
             `${shortModel(id)}: in ${u.inputTokens}, cache_r ${u.cacheReadInputTokens}, cache_w ${u.cacheCreationInputTokens}, out ${u.outputTokens}`
           )
           .join(' | ');
+        const totalCost = msg.total_cost_usd + decision.costUSD;
         const suffix = breakdown ? ` — ${breakdown}` : '';
-        process.stdout.write(`\n[$${msg.total_cost_usd.toFixed(4)}${suffix}]\n`);
+        process.stdout.write(`\n[$${totalCost.toFixed(4)}${suffix}]\n`);
         if (tokens) process.stdout.write(`[tokens — ${tokens}]\n`);
 
         let worstCacheWModel = '';
@@ -77,7 +88,7 @@ async function chat(prompt: string): Promise<void> {
             worstCacheWModel = shortModel(id);
           }
         }
-        const cost = msg.total_cost_usd;
+        const cost = totalCost;
         const reasons: string[] = [];
         let level: 'ERROR' | 'WARN' | null = null;
         const escalate = (l: 'ERROR' | 'WARN') => {
