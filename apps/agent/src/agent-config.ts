@@ -30,5 +30,5 @@ export const TIER_MODELS: Record<RouterTier, string> = {
 };
 
 export const CLASSIFIER_MODEL = HAIKU_MODEL;
-export const CLASSIFIER_TIMEOUT_MS = 2000;
+export const CLASSIFIER_TIMEOUT_MS = 3000;
 export const CLASSIFIER_MAX_TOKENS = 80;

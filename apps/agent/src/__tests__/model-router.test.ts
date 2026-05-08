@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CLASSIFIER_TIMEOUT_MS } from '../agent-config.js';
 import { classify } from '../model-router.js';
 
 const { mockCreate } = vi.hoisted(() => ({ mockCreate: vi.fn() }));
@@ -69,7 +70,7 @@ describe('classify()', () => {
       });
     });
     const promise = classify('test');
-    await vi.advanceTimersByTimeAsync(2500);
+    await vi.advanceTimersByTimeAsync(CLASSIFIER_TIMEOUT_MS + 500);
     const result = await promise;
     expect(result.tier).toBe('sonnet');
     expect(result.fallback).toBe(true);
