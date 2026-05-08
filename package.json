@@ -10,7 +10,8 @@
     "dev:web": "pnpm --filter web dev",
     "build:web": "pnpm --filter web build",
     "deploy:web": "pnpm run --filter web deploy",
-    "test:worker": "pnpm --filter worker test"
+    "test:worker": "pnpm --filter worker test",
+    "test:agent": "pnpm --filter agent test"
   },
   "devDependencies": {
     "typescript": "^5.8.3"
