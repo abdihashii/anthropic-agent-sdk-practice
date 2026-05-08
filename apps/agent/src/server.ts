@@ -7,9 +7,10 @@ import pg from 'pg';
 import {
   AGENT_ROOT,
   ALLOWED_TOOLS,
-  MAIN_MODEL,
   MAX_TURNS,
+  TIER_MODELS,
 } from './agent-config.js';
+import { classify } from './model-router.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const EXPECTED_TOKEN = process.env.INTERNAL_WORKER_TO_VPS ?? '';
@@ -152,13 +153,16 @@ app.post('/api/chat', async (c) => {
     [userMessageId, threadId, 'user', message],
   );
 
+  const decision = await classify(message);
+  console.error(`[router: ${decision.tier} — ${decision.reason}]`);
+
   return streamSSE(c, async (stream) => {
     const events = query({
       prompt: message,
       options: {
         allowedTools: ALLOWED_TOOLS,
         permissionMode: 'acceptEdits',
-        model: MAIN_MODEL,
+        model: TIER_MODELS[decision.tier],
         maxTurns: MAX_TURNS,
         cwd: AGENT_ROOT,
         resume: sdk_session_id ?? undefined,
@@ -243,7 +247,7 @@ app.post('/api/chat', async (c) => {
               data: JSON.stringify({
                 thread_id: threadId,
                 session_id: msg.session_id,
-                cost_usd: msg.total_cost_usd,
+                cost_usd: msg.total_cost_usd + decision.costUSD,
               }),
             });
           } else {
