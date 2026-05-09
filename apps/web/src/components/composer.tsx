@@ -1,19 +1,20 @@
 import { useState, type KeyboardEvent } from 'react'
-import { SendIcon } from 'lucide-react'
+import { SendIcon, SquareIcon } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { useMediaQuery } from '#/hooks/use-media-query'
 
 interface ComposerProps {
-  disabled: boolean
+  streaming: boolean
   onSend: (text: string) => Promise<void>
+  onStop: () => void
 }
 
-export function Composer({ disabled, onSend }: ComposerProps) {
+export function Composer({ streaming, onSend, onStop }: ComposerProps) {
   const [text, setText] = useState('')
   const isDesktop = useMediaQuery('(min-width: 768px)')
 
   const trimmed = text.trim()
-  const canSend = !disabled && trimmed !== ''
+  const canSend = !streaming && trimmed !== ''
 
   async function send() {
     if (!canSend) return
@@ -40,21 +41,33 @@ export function Composer({ disabled, onSend }: ComposerProps) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={disabled}
+          disabled={streaming}
           rows={1}
           placeholder="Message…"
           className="block max-h-40 w-full resize-none bg-transparent px-3 py-2 pr-11 text-base focus:outline-none disabled:opacity-50"
         />
-        <Button
-          type="button"
-          size="icon-sm"
-          aria-label="Send"
-          onClick={send}
-          disabled={!canSend}
-          className="absolute bottom-1.5 right-1.5"
-        >
-          <SendIcon className="size-3.5" />
-        </Button>
+        {streaming ? (
+          <Button
+            type="button"
+            size="icon-sm"
+            aria-label="Stop"
+            onClick={onStop}
+            className="absolute bottom-1.5 right-1.5"
+          >
+            <SquareIcon className="size-3.5" />
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="icon-sm"
+            aria-label="Send"
+            onClick={send}
+            disabled={!canSend}
+            className="absolute bottom-1.5 right-1.5"
+          >
+            <SendIcon className="size-3.5" />
+          </Button>
+        )}
       </div>
     </div>
   )

@@ -1,4 +1,5 @@
 export type SseEvent =
+  | { type: 'started'; data: { thread_id: string } }
   | { type: 'chunk'; data: { text: string } }
   | {
       type: 'tool_use'
@@ -12,7 +13,7 @@ export type SseEvent =
   | { type: 'error'; data: { message: string } }
   | {
       type: 'done'
-      data: { thread_id: string; session_id: string; cost_usd: number }
+      data: { thread_id: string; session_id: string | null; cost_usd: number }
     }
 
 export async function* parseSseStream(
@@ -55,6 +56,7 @@ function parseBlock(block: string): SseEvent | null {
 
   try {
     const payload = JSON.parse(data)
+    if (event === 'started') return { type: 'started', data: payload }
     if (event === 'chunk') return { type: 'chunk', data: payload }
     if (event === 'tool_use') return { type: 'tool_use', data: payload }
     if (event === 'done') return { type: 'done', data: payload }

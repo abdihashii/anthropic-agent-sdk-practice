@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { serve } from '@hono/node-server';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -10,7 +10,7 @@ import {
   MAX_TURNS,
   TIER_MODELS,
 } from './agent-config.js';
-import { classify } from './model-router.js';
+import { classify, type RouterDecision } from './model-router.js';
 import { buildTaskLogRow, writeTaskLog } from './task-logs.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -42,6 +42,231 @@ type Block =
       parent_tool_use_id?: string;
     };
 
+type EventType = 'started' | 'chunk' | 'tool_use' | 'error' | 'done';
+
+interface StreamEvent {
+  seq: number;
+  type: EventType;
+  data: unknown;
+}
+
+interface StreamState {
+  abortController: AbortController;
+  events: Array<StreamEvent>;
+  subscribers: Set<(ev: StreamEvent) => void>;
+}
+
+const activeStreams = new Map<string, StreamState>();
+
+function pushEvent(state: StreamState, type: EventType, data: unknown): void {
+  const ev: StreamEvent = { seq: state.events.length, type, data };
+  state.events.push(ev);
+  for (const cb of state.subscribers) {
+    try {
+      cb(ev);
+    } catch {
+      // subscriber callback shouldn't throw; if it does, skip
+    }
+  }
+}
+
+async function pipeStateToSse(
+  stream: SSEStreamingApi,
+  state: StreamState,
+): Promise<void> {
+  for (const ev of state.events) {
+    await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev.data) });
+  }
+  const last = state.events[state.events.length - 1];
+  if (last && last.type === 'done') return;
+
+  await new Promise<void>((resolve) => {
+    const cb = (ev: StreamEvent) => {
+      void stream
+        .writeSSE({ event: ev.type, data: JSON.stringify(ev.data) })
+        .catch(() => {});
+      if (ev.type === 'done') {
+        state.subscribers.delete(cb);
+        resolve();
+      }
+    };
+    state.subscribers.add(cb);
+  });
+}
+
+async function ownsThread(userId: string, threadId: string): Promise<boolean> {
+  const result = await pool.query(
+    'SELECT 1 FROM threads WHERE id = $1 AND user_id = $2',
+    [threadId, userId],
+  );
+  return result.rows.length > 0;
+}
+
+async function runChatTurn(args: {
+  threadId: string;
+  message: string;
+  sdkSessionId: string | null;
+  decision: RouterDecision;
+  state: StreamState;
+}): Promise<void> {
+  const { threadId, message, sdkSessionId, decision, state } = args;
+  const t0 = Date.now();
+  let donePayload = {
+    thread_id: threadId,
+    session_id: null as string | null,
+    cost_usd: decision.costUSD,
+  };
+
+  try {
+    const events = query({
+      prompt: message,
+      options: {
+        allowedTools: ALLOWED_TOOLS,
+        permissionMode: 'acceptEdits',
+        model: TIER_MODELS[decision.tier],
+        maxTurns: MAX_TURNS,
+        cwd: AGENT_ROOT,
+        resume: sdkSessionId ?? undefined,
+        includePartialMessages: true,
+        abortController: state.abortController,
+      },
+    });
+
+    const blocks: Array<Block> = [];
+    let pendingNewTextBlock = false;
+    let toolCallCount = 0;
+    let toolErrorCount = 0;
+    const subagentToolIds = new Set<string>();
+
+    for await (const msg of events) {
+      if (msg.type === 'stream_event') {
+        const e = msg.event;
+        if (
+          e.type === 'content_block_start' &&
+          e.content_block.type === 'text' &&
+          blocks.some((b) => b.type === 'text')
+        ) {
+          pendingNewTextBlock = true;
+        } else if (
+          e.type === 'content_block_delta' &&
+          e.delta.type === 'text_delta'
+        ) {
+          const last = blocks[blocks.length - 1];
+          if (pendingNewTextBlock || !last || last.type !== 'text') {
+            blocks.push({ type: 'text', text: e.delta.text });
+            pendingNewTextBlock = false;
+          } else {
+            last.text += e.delta.text;
+          }
+          pushEvent(state, 'chunk', { text: e.delta.text });
+        }
+      } else if (msg.type === 'assistant') {
+        const parentId = msg.parent_tool_use_id ?? null;
+        for (const block of msg.message.content) {
+          if (block.type === 'tool_use' && block.name !== 'ToolSearch') {
+            if (block.name === 'Agent') {
+              subagentToolIds.add(block.id);
+            } else {
+              toolCallCount += 1;
+            }
+            const payload = {
+              id: block.id,
+              name: block.name,
+              input: block.input,
+              ...(parentId ? { parent_tool_use_id: parentId } : {}),
+            };
+            blocks.push({ type: 'tool_use', ...payload });
+            pushEvent(state, 'tool_use', payload);
+          }
+        }
+      } else if (msg.type === 'user') {
+        const content = msg.message.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (
+              typeof block === 'object' &&
+              block !== null &&
+              (block as { type?: string }).type === 'tool_result' &&
+              (block as { is_error?: boolean }).is_error === true
+            ) {
+              toolErrorCount += 1;
+            }
+          }
+        }
+      } else if (msg.type === 'result') {
+        if (state.abortController.signal.aborted) {
+          break;
+        }
+        if (msg.subtype === 'success') {
+          const flatText = blocks
+            .filter(
+              (b): b is Extract<Block, { type: 'text' }> => b.type === 'text',
+            )
+            .map((b) => b.text)
+            .join('\n\n');
+          const assistantMessageId = randomUUID();
+          await pool.query(
+            `INSERT INTO messages (id, thread_id, role, content, content_blocks)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+              assistantMessageId,
+              threadId,
+              'assistant',
+              flatText,
+              JSON.stringify(blocks),
+            ],
+          );
+          await pool.query(
+            `UPDATE threads
+             SET sdk_session_id = $1, updated_at = NOW()
+             WHERE id = $2`,
+            [msg.session_id, threadId],
+          );
+          donePayload = {
+            thread_id: threadId,
+            session_id: msg.session_id,
+            cost_usd: msg.total_cost_usd + decision.costUSD,
+          };
+          try {
+            await writeTaskLog(
+              pool,
+              buildTaskLogRow({
+                threadId,
+                source: 'server',
+                decision,
+                modelUsage: msg.modelUsage,
+                totalCostUSD: msg.total_cost_usd + decision.costUSD,
+                toolCallCount,
+                toolErrorCount,
+                subagentCount: subagentToolIds.size,
+                numTurns: msg.num_turns,
+                latencyMs: Date.now() - t0,
+              }),
+            );
+          } catch (err) {
+            console.error('[task_logs] write failed:', err);
+          }
+        } else {
+          pushEvent(state, 'error', {
+            subtype: msg.subtype,
+            errors: msg.errors,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    if (!state.abortController.signal.aborted) {
+      console.error('[agent] query() loop threw:', err);
+      pushEvent(state, 'error', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  } finally {
+    pushEvent(state, 'done', donePayload);
+    activeStreams.delete(args.threadId);
+  }
+}
+
 const app = new Hono<AppEnv>();
 
 app.get('/health', (c) => c.text('agent up\n'));
@@ -69,7 +294,11 @@ app.get('/api/threads', async (c) => {
      LIMIT 200`,
     [userId],
   );
-  return c.json({ threads: result.rows });
+  const threads = result.rows.map((row: { id: string }) => ({
+    ...row,
+    is_streaming: activeStreams.has(row.id),
+  }));
+  return c.json({ threads });
 });
 
 app.post('/api/threads', async (c) => {
@@ -87,11 +316,7 @@ app.post('/api/threads', async (c) => {
 app.get('/api/threads/:id/messages', async (c) => {
   const userId = c.get('userId');
   const threadId = c.req.param('id');
-  const ownership = await pool.query(
-    'SELECT 1 FROM threads WHERE id = $1 AND user_id = $2',
-    [threadId, userId],
-  );
-  if (ownership.rows.length === 0) {
+  if (!(await ownsThread(userId, threadId))) {
     return c.json({ error: 'thread not found' }, 404);
   }
   const result = await pool.query(
@@ -102,6 +327,35 @@ app.get('/api/threads/:id/messages', async (c) => {
     [threadId],
   );
   return c.json({ messages: result.rows });
+});
+
+app.post('/api/threads/:id/stop', async (c) => {
+  const userId = c.get('userId');
+  const threadId = c.req.param('id');
+  if (!(await ownsThread(userId, threadId))) {
+    return c.json({ error: 'thread not found' }, 404);
+  }
+  const state = activeStreams.get(threadId);
+  if (!state) {
+    return c.json({ error: 'no active stream' }, 404);
+  }
+  state.abortController.abort();
+  return c.json({ ok: true });
+});
+
+app.get('/api/threads/:id/stream', async (c) => {
+  const userId = c.get('userId');
+  const threadId = c.req.param('id');
+  if (!(await ownsThread(userId, threadId))) {
+    return c.json({ error: 'thread not found' }, 404);
+  }
+  const state = activeStreams.get(threadId);
+  if (!state) {
+    return c.json({ error: 'no active stream' }, 404);
+  }
+  return streamSSE(c, async (stream) => {
+    await pipeStateToSse(stream, state);
+  });
 });
 
 app.get('/api/cost', async (c) => {
@@ -200,10 +454,10 @@ app.post('/api/chat', async (c) => {
 
   if (requestedThreadId === '') {
     threadId = randomUUID();
-    await pool.query(
-      'INSERT INTO threads (id, user_id) VALUES ($1, $2)',
-      [threadId, userId],
-    );
+    await pool.query('INSERT INTO threads (id, user_id) VALUES ($1, $2)', [
+      threadId,
+      userId,
+    ]);
     sdk_session_id = null;
     title = null;
   } else {
@@ -238,160 +492,25 @@ app.post('/api/chat', async (c) => {
 
   const decision = await classify(message);
   console.error(`[router: ${decision.tier} — ${decision.reason}]`);
-  const t0 = Date.now();
+
+  const state: StreamState = {
+    abortController: new AbortController(),
+    events: [],
+    subscribers: new Set(),
+  };
+  activeStreams.set(threadId, state);
+  pushEvent(state, 'started', { thread_id: threadId });
+
+  void runChatTurn({
+    threadId,
+    message,
+    sdkSessionId: sdk_session_id,
+    decision,
+    state,
+  });
 
   return streamSSE(c, async (stream) => {
-    const events = query({
-      prompt: message,
-      options: {
-        allowedTools: ALLOWED_TOOLS,
-        permissionMode: 'acceptEdits',
-        model: TIER_MODELS[decision.tier],
-        maxTurns: MAX_TURNS,
-        cwd: AGENT_ROOT,
-        resume: sdk_session_id ?? undefined,
-        includePartialMessages: true,
-      },
-    });
-
-    const blocks: Array<Block> = [];
-    let pendingNewTextBlock = false;
-    let toolCallCount = 0;
-    let toolErrorCount = 0;
-    const subagentToolIds = new Set<string>();
-
-    try {
-      for await (const msg of events) {
-        if (msg.type === 'stream_event') {
-          const e = msg.event;
-          if (
-            e.type === 'content_block_start' &&
-            e.content_block.type === 'text' &&
-            blocks.some((b) => b.type === 'text')
-          ) {
-            pendingNewTextBlock = true;
-          } else if (
-            e.type === 'content_block_delta' &&
-            e.delta.type === 'text_delta'
-          ) {
-            const last = blocks[blocks.length - 1];
-            if (pendingNewTextBlock || !last || last.type !== 'text') {
-              blocks.push({ type: 'text', text: e.delta.text });
-              pendingNewTextBlock = false;
-            } else {
-              last.text += e.delta.text;
-            }
-            await stream.writeSSE({
-              event: 'chunk',
-              data: JSON.stringify({ text: e.delta.text }),
-            });
-          }
-        } else if (msg.type === 'assistant') {
-          const parentId = msg.parent_tool_use_id ?? null;
-          for (const block of msg.message.content) {
-            if (block.type === 'tool_use' && block.name !== 'ToolSearch') {
-              if (block.name === 'Agent') {
-                subagentToolIds.add(block.id);
-              } else {
-                toolCallCount += 1;
-              }
-              const payload = {
-                id: block.id,
-                name: block.name,
-                input: block.input,
-                ...(parentId ? { parent_tool_use_id: parentId } : {}),
-              };
-              blocks.push({ type: 'tool_use', ...payload });
-              await stream.writeSSE({
-                event: 'tool_use',
-                data: JSON.stringify(payload),
-              });
-            }
-          }
-        } else if (msg.type === 'user') {
-          const content = msg.message.content;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (
-                typeof block === 'object' &&
-                block !== null &&
-                (block as { type?: string }).type === 'tool_result' &&
-                (block as { is_error?: boolean }).is_error === true
-              ) {
-                toolErrorCount += 1;
-              }
-            }
-          }
-        } else if (msg.type === 'result') {
-          if (msg.subtype === 'success') {
-            const flatText = blocks
-              .filter(
-                (b): b is Extract<Block, { type: 'text' }> => b.type === 'text',
-              )
-              .map((b) => b.text)
-              .join('\n\n');
-            const assistantMessageId = randomUUID();
-            await pool.query(
-              `INSERT INTO messages (id, thread_id, role, content, content_blocks)
-               VALUES ($1, $2, $3, $4, $5)`,
-              [
-                assistantMessageId,
-                threadId,
-                'assistant',
-                flatText,
-                JSON.stringify(blocks),
-              ],
-            );
-            await pool.query(
-              `UPDATE threads
-               SET sdk_session_id = $1, updated_at = NOW()
-               WHERE id = $2`,
-              [msg.session_id, threadId],
-            );
-            await stream.writeSSE({
-              event: 'done',
-              data: JSON.stringify({
-                thread_id: threadId,
-                session_id: msg.session_id,
-                cost_usd: msg.total_cost_usd + decision.costUSD,
-              }),
-            });
-            try {
-              await writeTaskLog(
-                pool,
-                buildTaskLogRow({
-                  threadId,
-                  source: 'server',
-                  decision,
-                  modelUsage: msg.modelUsage,
-                  totalCostUSD: msg.total_cost_usd + decision.costUSD,
-                  toolCallCount,
-                  toolErrorCount,
-                  subagentCount: subagentToolIds.size,
-                  numTurns: msg.num_turns,
-                  latencyMs: Date.now() - t0,
-                }),
-              );
-            } catch (err) {
-              console.error('[task_logs] write failed:', err);
-            }
-          } else {
-            await stream.writeSSE({
-              event: 'error',
-              data: JSON.stringify({ subtype: msg.subtype, errors: msg.errors }),
-            });
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[agent] query() loop threw:', err);
-      await stream.writeSSE({
-        event: 'error',
-        data: JSON.stringify({
-          message: err instanceof Error ? err.message : String(err),
-        }),
-      });
-    }
+    await pipeStateToSse(stream, state);
   });
 });
 
@@ -401,9 +520,6 @@ function timingSafeEqualHashed(a: string, b: string): boolean {
   return timingSafeEqual(da, db);
 }
 
-serve(
-  { fetch: app.fetch, hostname: '127.0.0.1', port: PORT },
-  (info) => {
-    console.log(`agent server listening http://${info.address}:${info.port}`);
-  },
-);
+serve({ fetch: app.fetch, hostname: '127.0.0.1', port: PORT }, (info) => {
+  console.log(`agent server listening http://${info.address}:${info.port}`);
+});

@@ -37,12 +37,14 @@ const defaultThreads = [
     title: 'Foo thread',
     created_at: '2026-05-01T00:00:00Z',
     updated_at: '2026-05-01T00:00:00Z',
+    is_streaming: false,
   },
   {
     id: 't_bar',
     title: 'Bar thread',
     created_at: '2026-05-01T00:00:00Z',
     updated_at: '2026-05-01T00:00:00Z',
+    is_streaming: false,
   },
 ]
 
@@ -117,4 +119,10 @@ export const defaultHandlers = [
     )
     return chat.response
   }),
+  http.post('/api/threads/:id/stop', () =>
+    HttpResponse.json({ ok: true }),
+  ),
+  http.get('/api/threads/:id/stream', () =>
+    HttpResponse.json({ error: 'no active stream' }, { status: 404 }),
+  ),
 ]

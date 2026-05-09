@@ -2,7 +2,7 @@ import { HttpResponse, http } from 'msw'
 
 interface DoneData {
   thread_id: string
-  session_id: string
+  session_id: string | null
   cost_usd: number
 }
 
@@ -14,6 +14,7 @@ interface ToolUseData {
 }
 
 export interface MockChatStream {
+  started: (data: { thread_id: string }) => void
   chunk: (text: string) => void
   toolUse: (data: ToolUseData) => void
   error: (data: { message: string } | { subtype?: string; errors?: Array<string> }) => void
@@ -59,6 +60,7 @@ export function mockChatStream(): MockChatStream {
   }
 
   return {
+    started: (data) => enqueue('started', data),
     chunk: (text) => enqueue('chunk', { text }),
     toolUse: (data) => enqueue('tool_use', data),
     error: (data) => {

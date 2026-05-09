@@ -22,6 +22,7 @@ export interface Thread {
   title: string | null
   created_at: string
   updated_at: string
+  is_streaming?: boolean
 }
 
 export interface Message {
@@ -78,10 +79,11 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface SendMessageResult {
   thread_id: string
-  session_id: string
+  session_id: string | null
 }
 
 interface SendMessageCallbacks {
+  onStart?: (threadId: string) => void
   onChunk: (text: string) => void
   onToolUse: (data: {
     id: string
@@ -90,6 +92,20 @@ interface SendMessageCallbacks {
     parent_tool_use_id?: string
   }) => void
   signal: AbortSignal
+}
+
+async function consumeChatStream(
+  body: ReadableStream<Uint8Array>,
+  callbacks: SendMessageCallbacks,
+): Promise<SendMessageResult> {
+  for await (const event of parseSseStream(body, callbacks.signal)) {
+    if (event.type === 'started') callbacks.onStart?.(event.data.thread_id)
+    else if (event.type === 'chunk') callbacks.onChunk(event.data.text)
+    else if (event.type === 'tool_use') callbacks.onToolUse(event.data)
+    else if (event.type === 'done') return event.data
+    else if (event.type === 'error') throw new Error(event.data.message)
+  }
+  throw new Error('stream ended without done event')
 }
 
 async function sendMessage(
@@ -108,14 +124,38 @@ async function sendMessage(
     const text = await res.text().catch(() => res.statusText)
     throw new ApiError(res.status, text)
   }
+  return consumeChatStream(res.body, callbacks)
+}
 
-  for await (const event of parseSseStream(res.body, callbacks.signal)) {
-    if (event.type === 'chunk') callbacks.onChunk(event.data.text)
-    else if (event.type === 'tool_use') callbacks.onToolUse(event.data)
-    else if (event.type === 'done') return event.data
-    else if (event.type === 'error') throw new Error(event.data.message)
+async function attachStream(
+  threadId: string,
+  callbacks: SendMessageCallbacks,
+): Promise<SendMessageResult | null> {
+  const res = await fetch(
+    `/api/threads/${encodeURIComponent(threadId)}/stream`,
+    {
+      credentials: 'include',
+      headers: { accept: 'text/event-stream' },
+      signal: callbacks.signal,
+    },
+  )
+  if (res.status === 404) return null
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new ApiError(res.status, text)
   }
-  throw new Error('stream ended without done event')
+  return consumeChatStream(res.body, callbacks)
+}
+
+async function stopThread(threadId: string): Promise<void> {
+  const res = await fetch(
+    `/api/threads/${encodeURIComponent(threadId)}/stop`,
+    { method: 'POST', credentials: 'include' },
+  )
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new ApiError(res.status, text)
+  }
 }
 
 export const api = {
@@ -185,6 +225,8 @@ export const api = {
     apiJson(`/api/threads/${encodeURIComponent(threadId)}/messages`),
   getCost: (): Promise<CostSummary> => apiJson<CostSummary>('/api/cost'),
   sendMessage,
+  attachStream,
+  stopThread,
 }
 
 export const meQueryOptions = () =>
@@ -199,6 +241,8 @@ export const threadsQueryOptions = () =>
     queryKey: ['threads'],
     queryFn: api.listThreads,
     staleTime: 30_000,
+    refetchInterval: (query) =>
+      query.state.data?.threads.some((t) => t.is_streaming) ? 2000 : false,
   })
 
 export const messagesQueryOptions = (threadId: string) =>
