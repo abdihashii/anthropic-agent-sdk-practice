@@ -12,6 +12,7 @@ import { meQueryOptions } from '#/lib/api'
 import { ThreadView } from '#/components/thread-view'
 import { Login } from '#/routes/login'
 import { Register } from '#/routes/register'
+import { CostPage } from '#/routes/_authed/cost'
 import { SettingsPanel } from '#/components/settings-panel'
 
 const TEST_THREAD_IDS = ['t_foo', 't_bar', 't_default'] as const
@@ -69,6 +70,12 @@ const threadRoute = createRoute({
   },
 })
 
+const costRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/cost',
+  component: CostPage,
+})
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
@@ -82,7 +89,7 @@ const registerRoute = createRoute({
 })
 
 const routeTree = rootRoute.addChildren([
-  authedRoute.addChildren([indexRoute, threadRoute]),
+  authedRoute.addChildren([indexRoute, threadRoute, costRoute]),
   loginRoute,
   registerRoute,
 ])

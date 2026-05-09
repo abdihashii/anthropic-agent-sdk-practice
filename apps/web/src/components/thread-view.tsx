@@ -56,6 +56,7 @@ export function ThreadView({ threadId }: ThreadViewProps) {
     await queryClient.fetchQuery(messagesQueryOptions(result.thread_id))
     chat.reset()
     queryClient.invalidateQueries({ queryKey: ['threads'] })
+    queryClient.invalidateQueries({ queryKey: ['cost'] })
     if (threadId === null) {
       router.navigate({
         to: '/t/$threadId',
