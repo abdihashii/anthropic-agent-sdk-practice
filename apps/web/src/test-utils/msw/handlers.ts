@@ -84,6 +84,21 @@ export const defaultHandlers = [
   http.get('/api/threads', () =>
     HttpResponse.json({ threads: defaultThreads }),
   ),
+  http.get('/api/cost', () =>
+    HttpResponse.json({
+      window_days: 7,
+      total_turns: 0,
+      total_cost_usd: 0,
+      cache_hit_ratio: 0,
+      tool_success_rate: null,
+      latency_p50_ms: null,
+      latency_p95_ms: null,
+      subagent_count_total: 0,
+      classifier_fallback_rate: 0,
+      weekly_by_model: [],
+      tier_distribution: {},
+    }),
+  ),
   http.get('/api/threads/:id/messages', async () => {
     await delay(10)
     return HttpResponse.json({ messages: [] })

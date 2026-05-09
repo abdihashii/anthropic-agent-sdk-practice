@@ -13,6 +13,7 @@ import { Route as RegisterRouteImport } from './routes/register'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
+import { Route as AuthedCostRouteImport } from './routes/_authed/cost'
 import { Route as AuthedTThreadIdRouteImport } from './routes/_authed/t.$threadId'
 
 const RegisterRoute = RegisterRouteImport.update({
@@ -34,6 +35,11 @@ const AuthedIndexRoute = AuthedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedCostRoute = AuthedCostRouteImport.update({
+  id: '/cost',
+  path: '/cost',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedTThreadIdRoute = AuthedTThreadIdRouteImport.update({
   id: '/t/$threadId',
   path: '/t/$threadId',
@@ -44,11 +50,13 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthedIndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/cost': typeof AuthedCostRoute
   '/t/$threadId': typeof AuthedTThreadIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/cost': typeof AuthedCostRoute
   '/': typeof AuthedIndexRoute
   '/t/$threadId': typeof AuthedTThreadIdRoute
 }
@@ -57,19 +65,21 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/_authed/cost': typeof AuthedCostRoute
   '/_authed/': typeof AuthedIndexRoute
   '/_authed/t/$threadId': typeof AuthedTThreadIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/register' | '/t/$threadId'
+  fullPaths: '/' | '/login' | '/register' | '/cost' | '/t/$threadId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login' | '/register' | '/' | '/t/$threadId'
+  to: '/login' | '/register' | '/cost' | '/' | '/t/$threadId'
   id:
     | '__root__'
     | '/_authed'
     | '/login'
     | '/register'
+    | '/_authed/cost'
     | '/_authed/'
     | '/_authed/t/$threadId'
   fileRoutesById: FileRoutesById
@@ -110,6 +120,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedIndexRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/cost': {
+      id: '/_authed/cost'
+      path: '/cost'
+      fullPath: '/cost'
+      preLoaderRoute: typeof AuthedCostRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/t/$threadId': {
       id: '/_authed/t/$threadId'
       path: '/t/$threadId'
@@ -121,11 +138,13 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthedRouteChildren {
+  AuthedCostRoute: typeof AuthedCostRoute
   AuthedIndexRoute: typeof AuthedIndexRoute
   AuthedTThreadIdRoute: typeof AuthedTThreadIdRoute
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
+  AuthedCostRoute: AuthedCostRoute,
   AuthedIndexRoute: AuthedIndexRoute,
   AuthedTThreadIdRoute: AuthedTThreadIdRoute,
 }

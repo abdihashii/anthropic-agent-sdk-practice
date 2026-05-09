@@ -38,6 +38,29 @@ export interface Credential {
   transports: Array<string> | null
 }
 
+export interface WeeklyByModelEntry {
+  model_id: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+}
+
+export interface CostSummary {
+  window_days: number
+  total_turns: number
+  total_cost_usd: number
+  cache_hit_ratio: number
+  tool_success_rate: number | null
+  latency_p50_ms: number | null
+  latency_p95_ms: number | null
+  subagent_count_total: number
+  classifier_fallback_rate: number
+  weekly_by_model: Array<WeeklyByModelEntry>
+  tier_distribution: Record<string, number>
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
@@ -160,6 +183,7 @@ export const api = {
     apiJson('/api/threads'),
   getMessages: (threadId: string): Promise<{ messages: Array<Message> }> =>
     apiJson(`/api/threads/${encodeURIComponent(threadId)}/messages`),
+  getCost: (): Promise<CostSummary> => apiJson<CostSummary>('/api/cost'),
   sendMessage,
 }
 
@@ -188,5 +212,12 @@ export const credentialsQueryOptions = () =>
   queryOptions({
     queryKey: ['credentials'],
     queryFn: api.listCredentials,
+    staleTime: 30_000,
+  })
+
+export const costQueryOptions = () =>
+  queryOptions({
+    queryKey: ['cost'],
+    queryFn: api.getCost,
     staleTime: 30_000,
   })

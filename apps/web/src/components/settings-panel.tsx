@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRouter } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import { PencilIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
 import { Input } from '#/components/ui/input'
 import { startRegistration } from '@simplewebauthn/browser'
@@ -145,6 +145,11 @@ export function SettingsPanel() {
             ))}
         </SheetHeader>
         <div className="space-y-6 p-4">
+          <Button asChild variant="outline" className="w-full justify-start">
+            <Link to="/cost" onClick={() => setOpen(false)}>
+              Cost
+            </Link>
+          </Button>
           <div>
             <p className="mb-2 text-sm font-medium">Theme</p>
             <div className="flex gap-2">
