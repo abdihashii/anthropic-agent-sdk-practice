@@ -43,10 +43,16 @@ export function ThreadList({ onThreadOpen }: ThreadListProps) {
                 to="/t/$threadId"
                 params={{ threadId: t.id }}
                 onClick={() => onThreadOpen?.()}
-                className="block truncate rounded px-2 py-2 text-sm hover:bg-accent"
+                className="flex items-center gap-2 rounded px-2 py-2 text-sm hover:bg-accent"
                 activeProps={{ className: 'bg-accent font-medium' }}
               >
-                {t.title || 'Untitled'}
+                {t.is_streaming && (
+                  <span
+                    aria-label="streaming"
+                    className="size-2 shrink-0 rounded-full bg-primary animate-pulse"
+                  />
+                )}
+                <span className="truncate">{t.title || 'Untitled'}</span>
               </Link>
             </li>
           ))}
