@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createInterface } from 'node:readline/promises';
+import pg from 'pg';
 import {
   AGENT_ROOT,
   ALLOWED_TOOLS,
@@ -12,6 +13,14 @@ import {
   TIER_MODELS,
 } from './agent-config.js';
 import { classify } from './model-router.js';
+import { buildTaskLogRow, writeTaskLog } from './task-logs.js';
+
+const DATABASE_URL = process.env.DATABASE_URL ?? '';
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL not set — refusing to start');
+  process.exit(1);
+}
+const pool = new pg.Pool({ connectionString: DATABASE_URL });
 
 function shortModel(id: string): string {
   return id.replace(/^claude-/, '').replace(/-\d{8}$/, '');
@@ -38,6 +47,9 @@ async function chat(prompt: string): Promise<void> {
   });
 
   const subagentByToolId = new Map<string, string>();
+  let toolCallCount = 0;
+  let toolErrorCount = 0;
+  const t0 = Date.now();
 
   for await (const msg of stream) {
     if (msg.type === 'assistant') {
@@ -53,11 +65,27 @@ async function chat(prompt: string): Promise<void> {
             : undefined;
           if (subagentType) {
             subagentByToolId.set(block.id, SUBAGENT_MODELS[subagentType] ?? mainModel);
+          } else if (block.name !== 'ToolSearch') {
+            toolCallCount += 1;
           }
           const label = subagentType
             ? `[agent: ${subagentType} (${shortModel(SUBAGENT_MODELS[subagentType] ?? mainModel)})]`
             : `[tool: ${block.name} (${shortModel(activeModel)})]`;
           process.stderr.write(`${label}\n`);
+        }
+      }
+    } else if (msg.type === 'user') {
+      const content = msg.message.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            typeof block === 'object' &&
+            block !== null &&
+            (block as { type?: string }).type === 'tool_result' &&
+            (block as { is_error?: boolean }).is_error === true
+          ) {
+            toolErrorCount += 1;
+          }
         }
       }
     } else if (msg.type === 'result') {
@@ -111,6 +139,27 @@ async function chat(prompt: string): Promise<void> {
         if (level) {
           const color = level === 'ERROR' ? '\x1b[31m' : '\x1b[33m';
           process.stderr.write(`${color}[${level}] ${reasons.join('; ')}\x1b[0m\n`);
+        }
+        try {
+          await writeTaskLog(
+            pool,
+            buildTaskLogRow({
+              threadId: null,
+              source: 'cli',
+              decision,
+              modelUsage: msg.modelUsage,
+              totalCostUSD: totalCost,
+              toolCallCount,
+              toolErrorCount,
+              subagentCount: subagentByToolId.size,
+              numTurns: msg.num_turns,
+              latencyMs: Date.now() - t0,
+            }),
+          );
+        } catch (err) {
+          process.stderr.write(
+            `[task_logs] write failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
         }
       } else {
         process.stderr.write(`\nFailed (${msg.subtype}): ${msg.errors.join('; ')}\n`);

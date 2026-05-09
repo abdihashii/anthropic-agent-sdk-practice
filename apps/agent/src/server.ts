@@ -11,6 +11,7 @@ import {
   TIER_MODELS,
 } from './agent-config.js';
 import { classify } from './model-router.js';
+import { buildTaskLogRow, writeTaskLog } from './task-logs.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const EXPECTED_TOKEN = process.env.INTERNAL_WORKER_TO_VPS ?? '';
@@ -51,8 +52,10 @@ app.use('/api/*', async (c, next) => {
     return c.json({ error: 'bad token' }, 401);
   }
   const userId = c.req.header('x-user-id');
-  if (!userId) return c.json({ error: 'missing user id' }, 401);
-  c.set('userId', userId);
+  if (!userId && c.req.path !== '/api/cost') {
+    return c.json({ error: 'missing user id' }, 401);
+  }
+  if (userId) c.set('userId', userId);
   await next();
 });
 
@@ -99,6 +102,86 @@ app.get('/api/threads/:id/messages', async (c) => {
     [threadId],
   );
   return c.json({ messages: result.rows });
+});
+
+app.get('/api/cost', async (c) => {
+  const [weeklyByModel, aggregates, tierDist] = await Promise.all([
+    pool.query(
+      `SELECT mu->>'model_id' AS model_id,
+              SUM((mu->>'cost_usd')::real) AS cost_usd,
+              SUM((mu->>'input_tokens')::int) AS input_tokens,
+              SUM((mu->>'output_tokens')::int) AS output_tokens,
+              SUM((mu->>'cache_read_tokens')::int) AS cache_read_tokens,
+              SUM((mu->>'cache_write_tokens')::int) AS cache_write_tokens
+       FROM task_logs, jsonb_array_elements(model_usage) mu
+       WHERE created_at >= NOW() - INTERVAL '7 days'
+       GROUP BY mu->>'model_id'
+       ORDER BY cost_usd DESC`,
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*)::int AS total_turns,
+         COALESCE(SUM(total_cost_usd), 0)::real AS total_cost_usd,
+         COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read_tokens,
+         COALESCE(SUM(cache_read_tokens + cache_write_tokens + input_tokens), 0)::bigint AS total_input_combined,
+         COALESCE(SUM(tool_call_count), 0)::bigint AS tool_calls,
+         COALESCE(SUM(tool_error_count), 0)::bigint AS tool_errors,
+         COALESCE(SUM(subagent_count), 0)::bigint AS subagent_count_total,
+         COALESCE(SUM(CASE WHEN classifier_fallback THEN 1 ELSE 0 END), 0)::int AS classifier_fallbacks,
+         PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms)::int AS latency_p50_ms,
+         PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)::int AS latency_p95_ms
+       FROM task_logs
+       WHERE created_at >= NOW() - INTERVAL '7 days'`,
+    ),
+    pool.query(
+      `SELECT tier, COUNT(*)::int AS n
+       FROM task_logs
+       WHERE created_at >= NOW() - INTERVAL '7 days'
+       GROUP BY tier`,
+    ),
+  ]);
+
+  const a = aggregates.rows[0];
+  const totalTurns: number = a.total_turns;
+
+  return c.json({
+    window_days: 7,
+    total_turns: totalTurns,
+    total_cost_usd: a.total_cost_usd,
+    cache_hit_ratio:
+      Number(a.total_input_combined) > 0
+        ? Number(a.cache_read_tokens) / Number(a.total_input_combined)
+        : 0,
+    tool_success_rate:
+      Number(a.tool_calls) > 0
+        ? 1 - Number(a.tool_errors) / Number(a.tool_calls)
+        : null,
+    latency_p50_ms: a.latency_p50_ms,
+    latency_p95_ms: a.latency_p95_ms,
+    subagent_count_total: Number(a.subagent_count_total),
+    classifier_fallback_rate:
+      totalTurns > 0 ? a.classifier_fallbacks / totalTurns : 0,
+    weekly_by_model: weeklyByModel.rows.map(
+      (r: {
+        model_id: string;
+        cost_usd: number;
+        input_tokens: string | number;
+        output_tokens: string | number;
+        cache_read_tokens: string | number;
+        cache_write_tokens: string | number;
+      }) => ({
+        model_id: r.model_id,
+        cost_usd: r.cost_usd,
+        input_tokens: Number(r.input_tokens),
+        output_tokens: Number(r.output_tokens),
+        cache_read_tokens: Number(r.cache_read_tokens),
+        cache_write_tokens: Number(r.cache_write_tokens),
+      }),
+    ),
+    tier_distribution: Object.fromEntries(
+      tierDist.rows.map((r: { tier: string; n: number }) => [r.tier, r.n]),
+    ),
+  });
 });
 
 app.post('/api/chat', async (c) => {
@@ -155,6 +238,7 @@ app.post('/api/chat', async (c) => {
 
   const decision = await classify(message);
   console.error(`[router: ${decision.tier} — ${decision.reason}]`);
+  const t0 = Date.now();
 
   return streamSSE(c, async (stream) => {
     const events = query({
@@ -172,6 +256,9 @@ app.post('/api/chat', async (c) => {
 
     const blocks: Array<Block> = [];
     let pendingNewTextBlock = false;
+    let toolCallCount = 0;
+    let toolErrorCount = 0;
+    const subagentToolIds = new Set<string>();
 
     try {
       for await (const msg of events) {
@@ -203,6 +290,11 @@ app.post('/api/chat', async (c) => {
           const parentId = msg.parent_tool_use_id ?? null;
           for (const block of msg.message.content) {
             if (block.type === 'tool_use' && block.name !== 'ToolSearch') {
+              if (block.name === 'Agent') {
+                subagentToolIds.add(block.id);
+              } else {
+                toolCallCount += 1;
+              }
               const payload = {
                 id: block.id,
                 name: block.name,
@@ -214,6 +306,20 @@ app.post('/api/chat', async (c) => {
                 event: 'tool_use',
                 data: JSON.stringify(payload),
               });
+            }
+          }
+        } else if (msg.type === 'user') {
+          const content = msg.message.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (
+                typeof block === 'object' &&
+                block !== null &&
+                (block as { type?: string }).type === 'tool_result' &&
+                (block as { is_error?: boolean }).is_error === true
+              ) {
+                toolErrorCount += 1;
+              }
             }
           }
         } else if (msg.type === 'result') {
@@ -250,6 +356,25 @@ app.post('/api/chat', async (c) => {
                 cost_usd: msg.total_cost_usd + decision.costUSD,
               }),
             });
+            try {
+              await writeTaskLog(
+                pool,
+                buildTaskLogRow({
+                  threadId,
+                  source: 'server',
+                  decision,
+                  modelUsage: msg.modelUsage,
+                  totalCostUSD: msg.total_cost_usd + decision.costUSD,
+                  toolCallCount,
+                  toolErrorCount,
+                  subagentCount: subagentToolIds.size,
+                  numTurns: msg.num_turns,
+                  latencyMs: Date.now() - t0,
+                }),
+              );
+            } catch (err) {
+              console.error('[task_logs] write failed:', err);
+            }
           } else {
             await stream.writeSSE({
               event: 'error',
