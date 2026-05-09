@@ -1,5 +1,6 @@
+import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useBlocker, useRouter } from '@tanstack/react-router'
+import { useRouter } from '@tanstack/react-router'
 import {
   StickToBottom,
   useStickToBottom,
@@ -8,30 +9,10 @@ import {
 import { ChevronDownIcon } from 'lucide-react'
 import { messagesQueryOptions } from '#/lib/api'
 import { useChatStream } from '#/hooks/use-chat-stream'
-import { useIsMobile } from '#/hooks/use-mobile'
 import { MessageList } from '#/components/message-list'
 import { Composer } from '#/components/composer'
 import { MessageBlocks } from '#/components/message-block'
 import { Button } from '#/components/ui/button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '#/components/ui/alert-dialog'
-import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerDescription,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerTitle,
-} from '#/components/ui/drawer'
 
 interface ThreadViewProps {
   threadId: string | null
@@ -42,11 +23,29 @@ export function ThreadView({ threadId }: ThreadViewProps) {
   const router = useRouter()
   const stickInstance = useStickToBottom({ initial: 'instant', resize: 'smooth' })
   const chat = useChatStream()
-  const blocker = useBlocker({
-    shouldBlockFn: () => chat.status === 'streaming',
-    withResolver: true,
-    enableBeforeUnload: () => chat.status === 'streaming',
-  })
+  const { activeThreadId, attach, reset } = chat
+
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ['threads'] })
+  }, [activeThreadId, queryClient])
+
+  useEffect(() => {
+    if (threadId === null) return
+    let cancelled = false
+    attach(threadId)
+      .then(async (result) => {
+        if (cancelled || !result) return
+        queryClient.removeQueries({ queryKey: ['messages', result.thread_id] })
+        await queryClient.fetchQuery(messagesQueryOptions(result.thread_id))
+        if (cancelled) return
+        reset()
+        queryClient.invalidateQueries({ queryKey: ['cost'] })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [threadId, attach, reset, queryClient])
 
   async function handleSend(text: string) {
     void stickInstance.scrollToBottom()
@@ -55,7 +54,6 @@ export function ThreadView({ threadId }: ThreadViewProps) {
     queryClient.removeQueries({ queryKey: ['messages', result.thread_id] })
     await queryClient.fetchQuery(messagesQueryOptions(result.thread_id))
     chat.reset()
-    queryClient.invalidateQueries({ queryKey: ['threads'] })
     queryClient.invalidateQueries({ queryKey: ['cost'] })
     if (threadId === null) {
       router.navigate({
@@ -69,6 +67,10 @@ export function ThreadView({ threadId }: ThreadViewProps) {
   const showThinking =
     chat.status === 'streaming' &&
     (chat.blocks.length === 0 || lastBlock?.type === 'tool_use')
+  const hasLiveContent =
+    chat.pendingUserMessage !== null ||
+    chat.blocks.length > 0 ||
+    showThinking
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -78,14 +80,16 @@ export function ThreadView({ threadId }: ThreadViewProps) {
       >
         <StickToBottom.Content className="flex flex-col">
           {threadId !== null && <MessageList threadId={threadId} />}
-          {chat.pendingUserMessage !== null && (
+          {hasLiveContent && (
             <div className="flex flex-col gap-3 p-4 pt-0">
-              <div className="max-w-[85%] self-end rounded-lg bg-primary px-4 py-2 text-primary-foreground">
-                <pre className="whitespace-pre-wrap font-sans text-sm">
-                  {chat.pendingUserMessage}
-                </pre>
-              </div>
-              <MessageBlocks blocks={chat.blocks} />
+              {chat.pendingUserMessage !== null && (
+                <div className="max-w-[85%] self-end rounded-lg bg-primary px-4 py-2 text-primary-foreground">
+                  <pre className="whitespace-pre-wrap font-sans text-sm">
+                    {chat.pendingUserMessage}
+                  </pre>
+                </div>
+              )}
+              {chat.blocks.length > 0 && <MessageBlocks blocks={chat.blocks} />}
               {showThinking && (
                 <p className="self-start text-sm italic text-muted-foreground">
                   Thinking…
@@ -117,71 +121,11 @@ export function ThreadView({ threadId }: ThreadViewProps) {
         </div>
       )}
       <Composer
-        disabled={chat.status === 'streaming'}
+        streaming={chat.status === 'streaming'}
         onSend={handleSend}
-      />
-      <NavGuardPrompt
-        open={blocker.status === 'blocked'}
-        onCancel={() => blocker.reset?.()}
-        onLeave={() => {
-          chat.abort()
-          blocker.proceed?.()
-        }}
+        onStop={chat.abort}
       />
     </div>
-  )
-}
-
-interface NavGuardPromptProps {
-  open: boolean
-  onCancel: () => void
-  onLeave: () => void
-}
-
-function NavGuardPrompt({ open, onCancel, onLeave }: NavGuardPromptProps) {
-  const isMobile = useIsMobile()
-  const onOpenChange = (next: boolean) => {
-    if (!next) onCancel()
-  }
-  const title = 'Stop response?'
-  const description = 'Leaving will cancel the response in progress.'
-
-  if (isMobile) {
-    return (
-      <Drawer open={open} onOpenChange={onOpenChange}>
-        <DrawerContent>
-          <DrawerHeader>
-            <DrawerTitle>{title}</DrawerTitle>
-            <DrawerDescription>{description}</DrawerDescription>
-          </DrawerHeader>
-          <DrawerFooter>
-            <Button variant="destructive" onClick={onLeave}>
-              Leave
-            </Button>
-            <DrawerClose asChild>
-              <Button variant="outline">Stay</Button>
-            </DrawerClose>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
-    )
-  }
-
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Stay</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onLeave}>
-            Leave
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   )
 }
 

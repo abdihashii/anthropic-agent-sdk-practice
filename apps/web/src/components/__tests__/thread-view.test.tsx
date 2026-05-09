@@ -4,144 +4,93 @@ vi.mock('#/hooks/use-mobile', () => ({
   useIsMobile: vi.fn(() => false),
 }))
 
-vi.mock('#/components/ui/drawer', async () => {
-  const React = await import('react')
-  const DrawerCtx = React.createContext<
-    ((open: boolean) => void) | undefined
-  >(undefined)
-  return {
-    Drawer: ({
-      open,
-      onOpenChange,
-      children,
-    }: {
-      open: boolean
-      onOpenChange: (open: boolean) => void
-      children: React.ReactNode
-    }) =>
-      open
-        ? React.createElement(
-            DrawerCtx.Provider,
-            { value: onOpenChange },
-            React.createElement('div', { role: 'dialog' }, children),
-          )
-        : null,
-    DrawerContent: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    DrawerHeader: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    DrawerTitle: ({ children }: { children: React.ReactNode }) =>
-      React.createElement('h2', null, children),
-    DrawerDescription: ({ children }: { children: React.ReactNode }) =>
-      React.createElement('p', null, children),
-    DrawerFooter: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    DrawerClose: ({
-      children,
-      asChild,
-    }: {
-      children: React.ReactNode
-      asChild?: boolean
-    }) => {
-      const onOpenChange = React.useContext(DrawerCtx)
-      const handleClick = () => onOpenChange?.(false)
-      if (asChild && React.isValidElement(children)) {
-        return React.cloneElement(children, {
-          onClick: handleClick,
-        } as Partial<React.HTMLAttributes<HTMLElement>>)
-      }
-      return React.createElement('button', { onClick: handleClick }, children)
-    },
-  }
-})
-
 import { screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { useIsMobile } from '#/hooks/use-mobile'
+import { HttpResponse, http } from 'msw'
+import { describe, expect, it } from 'vitest'
 import { server } from '#/test-utils/msw/server'
 import { chatHandler, mockChatStream } from '#/test-utils/msw/chat-stream'
 import { renderWithProviders } from '#/test-utils/render'
 
-const PROMPT_TEXT = 'Stop response?'
-
-describe.each([
-  { label: 'desktop (AlertDialog)', isMobile: false },
-  { label: 'mobile (Drawer)', isMobile: true },
-])('ThreadView — $label', ({ isMobile }) => {
-  beforeEach(() => {
-    vi.mocked(useIsMobile).mockReturnValue(isMobile)
-  })
-
-  it('Scenario 1: Stay mid-stream — response keeps streaming, URL unchanged', async () => {
+describe('ThreadView', () => {
+  it('shows Stop button while streaming, Send button when idle', async () => {
     const chat = mockChatStream()
     server.use(chatHandler(chat))
-    const { router, user } = await renderWithProviders({
+    const { user } = await renderWithProviders({
       initialPath: '/t/t_foo',
-      isMobile,
-      seedMessages: { t_foo: [], t_bar: [] },
+      seedMessages: { t_foo: [] },
     })
 
-    const textarea = screen.getByPlaceholderText('Message…')
-    await user.type(textarea, 'hello')
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
+
+    await user.type(screen.getByPlaceholderText('Message…'), 'hi')
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
-    chat.chunk('responding')
-    await screen.findByText('responding')
-
-    await user.click(screen.getByRole('link', { name: 't_bar' }))
-    await screen.findByText(PROMPT_TEXT)
-
-    await user.click(screen.getByRole('button', { name: 'Stay' }))
-    await waitFor(() =>
-      expect(screen.queryByText(PROMPT_TEXT)).not.toBeInTheDocument(),
-    )
-    expect(router.state.location.pathname).toBe('/t/t_foo')
-
-    chat.chunk(' more')
-    await screen.findByText('responding more')
+    await screen.findByRole('button', { name: 'Stop' })
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
 
     chat.done({ thread_id: 't_foo', session_id: 's', cost_usd: 0 })
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled(),
-    )
+
+    await screen.findByRole('button', { name: 'Send' })
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 
-  it('Scenario 2: Leave mid-stream — destination renders clean, no stale streaming state', async () => {
+  it('clicking Stop POSTs /api/threads/:id/stop with the resolved thread_id', async () => {
     const chat = mockChatStream()
     server.use(chatHandler(chat))
-    const { router, user } = await renderWithProviders({
+    const stopSpy = vi.fn()
+    server.use(
+      http.post('/api/threads/:id/stop', ({ params }) => {
+        stopSpy(params.id)
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    const { user } = await renderWithProviders({
       initialPath: '/t/t_foo',
-      isMobile,
-      seedMessages: { t_foo: [], t_bar: [] },
+      seedMessages: { t_foo: [] },
     })
 
-    await user.type(screen.getByPlaceholderText('Message…'), 'hello')
+    await user.type(screen.getByPlaceholderText('Message…'), 'hi')
     await user.click(screen.getByRole('button', { name: 'Send' }))
 
     chat.chunk('partial')
     await screen.findByText('partial')
 
-    await user.click(screen.getByRole('link', { name: 't_bar' }))
-    await screen.findByText(PROMPT_TEXT)
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(stopSpy).toHaveBeenCalledWith('t_foo'))
 
-    await user.click(screen.getByRole('button', { name: 'Leave' }))
+    chat.done({ thread_id: 't_foo', session_id: null, cost_usd: 0 })
+    await screen.findByRole('button', { name: 'Send' })
+  })
+
+  it('navigating mid-stream does not show a dialog and destination renders clean', async () => {
+    const chat = mockChatStream()
+    server.use(chatHandler(chat))
+    const { router, user } = await renderWithProviders({
+      initialPath: '/t/t_foo',
+      seedMessages: { t_foo: [], t_bar: [] },
+    })
+
+    await user.type(screen.getByPlaceholderText('Message…'), 'hi')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    chat.chunk('streaming')
+    await screen.findByText('streaming')
+
+    await user.click(screen.getByRole('link', { name: 't_bar' }))
 
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/t/t_bar'),
     )
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled(),
-    )
-    expect(screen.queryByText('Thinking…')).not.toBeInTheDocument()
-    expect(screen.queryByText('partial')).not.toBeInTheDocument()
-    expect(screen.queryByText('hello')).not.toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText('Stop response?')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await screen.findByRole('button', { name: 'Send' })
+    expect(screen.queryByText('streaming')).not.toBeInTheDocument()
   })
 
-  it('Scenario 3: First-message auto-nav — no spurious dialog (closure-staleness regression)', async () => {
+  it('first-message auto-nav from / lands on /t/<id> with no dialog', async () => {
     const { router, user } = await renderWithProviders({
       initialPath: '/',
-      isMobile,
     })
 
     await user.type(screen.getByPlaceholderText('Message…'), 'hello')
@@ -150,56 +99,12 @@ describe.each([
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/t/t_default'),
     )
-    expect(screen.queryByText(PROMPT_TEXT)).not.toBeInTheDocument()
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('Scenario 4: Abort then immediate resend — no stale error UI', async () => {
-    const chat1 = mockChatStream()
-    server.use(chatHandler(chat1))
+  it('cross-route nav (/t/foo → /) destination renders clean', async () => {
     const { router, user } = await renderWithProviders({
       initialPath: '/t/t_foo',
-      isMobile,
-      seedMessages: { t_foo: [], t_bar: [] },
-    })
-
-    await user.type(screen.getByPlaceholderText('Message…'), 'first')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
-
-    chat1.chunk('first response')
-    await screen.findByText('first response')
-
-    await user.click(screen.getByRole('link', { name: 't_bar' }))
-    await screen.findByText(PROMPT_TEXT)
-    await user.click(screen.getByRole('button', { name: 'Leave' }))
-
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe('/t/t_bar'),
-    )
-
-    const chat2 = mockChatStream()
-    server.use(chatHandler(chat2))
-
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-
-    await user.type(screen.getByPlaceholderText('Message…'), 'second')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
-
-    chat2.chunk('second response')
-    await screen.findByText('second response')
-
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-
-    chat2.done({ thread_id: 't_bar', session_id: 's', cost_usd: 0 })
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled(),
-    )
-  })
-
-  it('Scenario 5a: Cross-route nav (/t/foo → /) — destination renders clean', async () => {
-    const { router, user } = await renderWithProviders({
-      initialPath: '/t/t_foo',
-      isMobile,
       seedMessages: { t_foo: [] },
     })
 
@@ -207,16 +112,29 @@ describe.each([
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/'))
     expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled()
-    expect(screen.queryByText(PROMPT_TEXT)).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('Scenario 6: Retry button after error re-sends the same message', async () => {
+  it('same-route param swap (/t/foo → /t/bar) destination renders clean', async () => {
+    const { router, user } = await renderWithProviders({
+      initialPath: '/t/t_foo',
+      seedMessages: { t_foo: [], t_bar: [] },
+    })
+
+    await user.click(screen.getByRole('link', { name: 't_bar' }))
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/t/t_bar'),
+    )
+    expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('Retry button after error re-sends the same message', async () => {
     const chat1 = mockChatStream()
     server.use(chatHandler(chat1))
     const { user } = await renderWithProviders({
       initialPath: '/t/t_foo',
-      isMobile,
       seedMessages: { t_foo: [] },
     })
 
@@ -235,17 +153,14 @@ describe.each([
     await screen.findByText('second try')
 
     chat2.done({ thread_id: 't_foo', session_id: 's', cost_usd: 0 })
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled(),
-    )
+    await screen.findByRole('button', { name: 'Send' })
   })
 
-  it('Scenario 7: stream ends without done event surfaces error UI', async () => {
+  it('stream ends without done event surfaces error UI', async () => {
     const chat = mockChatStream()
     server.use(chatHandler(chat))
     const { user } = await renderWithProviders({
       initialPath: '/t/t_foo',
-      isMobile,
       seedMessages: { t_foo: [] },
     })
 
@@ -264,20 +179,44 @@ describe.each([
     expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 
-  it('Scenario 5b: Same-route param swap (/t/foo → /t/bar) — destination renders clean', async () => {
-    const { router, user } = await renderWithProviders({
+  it('invalidates the threads list when a stream starts', async () => {
+    const chat = mockChatStream()
+    server.use(chatHandler(chat))
+    const { queryClient, user } = await renderWithProviders({
       initialPath: '/t/t_foo',
-      isMobile,
-      seedMessages: { t_foo: [], t_bar: [] },
+      seedMessages: { t_foo: [] },
     })
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
 
-    await user.click(screen.getByRole('link', { name: 't_bar' }))
+    await user.type(screen.getByPlaceholderText('Message…'), 'hi')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe('/t/t_bar'),
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['threads'] }),
     )
-    expect(screen.getByPlaceholderText('Message…')).not.toBeDisabled()
-    expect(screen.queryByText(PROMPT_TEXT)).not.toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    chat.done({ thread_id: 't_foo', session_id: 's', cost_usd: 0 })
+    await screen.findByRole('button', { name: 'Send' })
+  })
+
+  it('attaches to an active stream on mount and renders replayed blocks', async () => {
+    const chat = mockChatStream()
+    server.use(
+      http.get('/api/threads/:id/stream', ({ request }) => {
+        request.signal.addEventListener('abort', chat.abort)
+        return chat.response
+      }),
+    )
+    await renderWithProviders({
+      initialPath: '/t/t_foo',
+      seedMessages: { t_foo: [] },
+    })
+
+    chat.chunk('replay this')
+    await screen.findByText('replay this')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+
+    chat.done({ thread_id: 't_foo', session_id: 's', cost_usd: 0 })
+    await screen.findByRole('button', { name: 'Send' })
   })
 })
